@@ -69,6 +69,7 @@ Remove blockchain and state databases`,
 			dbExportCmd,
 			dbMetadataCmd,
 			dbCheckStateContentCmd,
+			dbSetFinalizedCmd,
 		},
 	}
 	dbInspectCmd = &cli.Command{
@@ -192,6 +193,14 @@ WARNING: This is a low-level operation which may cause database corruption!`,
 			utils.SyncModeFlag,
 		}, utils.NetworkFlags, utils.DatabasePathFlags),
 		Description: "Shows metadata about the chain status.",
+	}
+	dbSetFinalizedCmd = &cli.Command{
+		Action:      dbSetFinalized,
+		Name:        "set-finalized",
+		Usage:       "Set finalized block to specified hash(or to latest hash if not specified)",
+		ArgsUsage:   "<hex-encoded block hash>",
+		Flags:       flags.Merge(utils.NetworkFlags, utils.DatabaseFlags),
+		Description: "Set finalized block to specified hash(or to latest hash if not specified)",
 	}
 )
 
