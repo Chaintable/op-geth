@@ -29,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	txtracelib "github.com/DeBankDeFi/etherlib/pkg/txtracev2"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus"
@@ -122,6 +123,10 @@ func (context *chainContext) GetHeader(hash common.Hash, number uint64) *types.H
 		return nil
 	}
 	return header
+}
+
+func (context *chainContext) TxTraceStore() txtracelib.Store {
+	return nil
 }
 
 // chainContext constructs the context reader which is used by the evm for reading

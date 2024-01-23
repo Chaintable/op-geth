@@ -713,3 +713,37 @@ func showMetaData(ctx *cli.Context) error {
 	table.Render()
 	return nil
 }
+
+func dbSetFinalized(ctx *cli.Context) error {
+	stack, _ := makeConfigNode(ctx)
+	defer stack.Close()
+
+	chain, db := utils.MakeChain(ctx, stack, false)
+	defer db.Close()
+
+	var headHash common.Hash
+	var headNumber *uint64
+	if ctx.NArg() > 0 {
+		// set to specified block hash
+		key, err := common.ParseHexOrString(ctx.Args().Get(0))
+		if err != nil {
+			log.Info("Could not decode the block hash", "error", err)
+			return err
+		}
+		headHash = common.BytesToHash(key)
+	} else {
+		// set to latest block hash
+		headHash = rawdb.ReadHeadBlockHash(db)
+	}
+
+	headNumber = rawdb.ReadHeaderNumber(db, headHash)
+	if headNumber == nil {
+		err := fmt.Errorf("head block missing")
+		log.Info("db corrupt", "error", err)
+		return err
+	}
+	chain.SetHead(*headNumber)
+	rawdb.WriteFinalizedBlockHash(db, headHash)
+
+	return nil
+}

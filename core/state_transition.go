@@ -145,6 +145,9 @@ type Message struct {
 	IsDepositTx   bool                // IsDepositTx indicates the message is force-included and can persist a mint.
 	Mint          *big.Int            // Mint is the amount to mint before EVM processing, or nil if there is no minting.
 	RollupDataGas types.RollupGasData // RollupDataGas indicates the rollup cost of the message, 0 if not a rollup or no cost.
+
+	// Pre Exec
+	IsPre bool
 }
 
 // TransactionToMessage converts a transaction into a Message.
@@ -239,6 +242,9 @@ func (st *StateTransition) buyGas() error {
 	mgval := new(big.Int).SetUint64(st.msg.GasLimit)
 	mgval = mgval.Mul(mgval, st.msg.GasPrice)
 	var l1Cost *big.Int
+	if st.evm.Config.PreExec {
+		mgval = big.NewInt(0)
+	}
 	if st.evm.Context.L1CostFunc != nil && !st.msg.SkipAccountChecks {
 		l1Cost = st.evm.Context.L1CostFunc(st.evm.Context.BlockNumber.Uint64(), st.evm.Context.Time, st.msg.RollupDataGas, st.msg.IsDepositTx)
 	}
@@ -249,6 +255,9 @@ func (st *StateTransition) buyGas() error {
 	if st.msg.GasFeeCap != nil {
 		balanceCheck = new(big.Int).SetUint64(st.msg.GasLimit)
 		balanceCheck = balanceCheck.Mul(balanceCheck, st.msg.GasFeeCap)
+		if st.evm.Config.PreExec {
+			balanceCheck = big.NewInt(0)
+		}
 		balanceCheck.Add(balanceCheck, st.msg.Value)
 		if l1Cost != nil {
 			balanceCheck.Add(balanceCheck, l1Cost)
@@ -515,6 +524,9 @@ func (st *StateTransition) refundGas(refundQuotient uint64) {
 
 	// Return ETH for remaining gas, exchanged at the original rate.
 	remaining := new(big.Int).Mul(new(big.Int).SetUint64(st.gasRemaining), st.msg.GasPrice)
+	if st.evm.Config.PreExec {
+		remaining = new(big.Int).SetUint64(0)
+	}
 	st.state.AddBalance(st.msg.From, remaining)
 
 	// Also return remaining gas to the block gas counter so it is

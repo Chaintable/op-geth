@@ -1,0 +1,44 @@
+name: op-geth lint and build
+
+on:
+  pull_request:
+    branches:
+      - 'debank'
+  workflow_dispatch:
+
+env:
+  REGISTRY: 294354037686.dkr.ecr.ap-northeast-1.amazonaws.com
+  IMAGE: blockchain-op-geth
+  DOCKERFILE: Dockerfile.debank
+
+jobs:
+  build:
+    runs-on: [self-hosted, general]
+
+    steps:
+    - name: Install Go
+      uses: actions/setup-go@v2
+      with:
+        go-version: 1.19.x
+
+    - name: Checkout code
+      uses: actions/checkout@v2
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+
+    - uses: tibdex/github-app-token@v1
+      id: generate-token
+      with:
+        app_id: ${{ secrets.RELEASE_MANAGER_APP_ID }}
+        private_key: ${{ secrets.RELEASE_MANAGER_APP_SECRET }}
+
+    - name: Set env
+      run: |
+        # echo "REVISION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
+        echo "REVISION=${GITHUB_SHA::8}" >> $GITHUB_ENV
+    - name: Docker build and push
+      run: |
+        docker build --build-arg ACCESS_TOKEN=${{ steps.generate-token.outputs.token }} -t ${REGISTRY}/${IMAGE}:${REVISION} -f ${DOCKERFILE} .
+        docker push ${REGISTRY}/${IMAGE}:${REVISION}
+        docker run --name dryrun --rm ${REGISTRY}/${IMAGE}:${REVISION} version
+        docker rmi ${REGISTRY}/${IMAGE}:${REVISION}

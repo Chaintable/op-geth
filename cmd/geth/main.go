@@ -207,6 +207,11 @@ var (
 		utils.MetricsInfluxDBBucketFlag,
 		utils.MetricsInfluxDBOrganizationFlag,
 	}
+
+	txTraceFlags = []cli.Flag{
+		utils.TxTraceEnabledFlag,
+		utils.TxTraceStoreFlag,
+	}
 )
 
 var app = flags.NewApp("the go-ethereum command line interface")
@@ -257,6 +262,7 @@ func init() {
 		consoleFlags,
 		debug.Flags,
 		metricsFlags,
+		txTraceFlags,
 	)
 
 	app.Before = func(ctx *cli.Context) error {

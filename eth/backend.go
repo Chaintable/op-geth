@@ -58,6 +58,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/ethereum/go-ethereum/txtrace"
 )
 
 // Config contains the configuration options of the ETH protocol.
@@ -211,7 +212,17 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	if config.OverrideOptimism != nil {
 		overrides.OverrideOptimism = config.OverrideOptimism
 	}
-	eth.blockchain, err = core.NewBlockChain(chainDb, cacheConfig, config.Genesis, &overrides, eth.engine, vmConfig, eth.shouldPreserve, &config.TxLookupLimit)
+	// Init tx-trace underlying database and storage layer
+	var traceDb ethdb.Database
+	if config.TxTrace.Enabled {
+		vmConfig.Debug = true
+		traceDb, err = stack.OpenDatabaseWithTrace(config.DatabaseCache, config.DatabaseHandles, config.TxTrace.StoreDir, "eth/db/tracedb", false)
+		if err != nil {
+			return nil, err
+		}
+	}
+	txStore := txtrace.NewTraceStore(traceDb)
+	eth.blockchain, err = core.NewBlockChainV2(chainDb, cacheConfig, config.Genesis, &overrides, eth.engine, vmConfig, eth.shouldPreserve, &config.TxLookupLimit, &config.TxTrace, txStore)
 	if err != nil {
 		return nil, err
 	}
@@ -357,6 +368,16 @@ func (s *Ethereum) APIs() []rpc.API {
 		}, {
 			Namespace: "net",
 			Service:   s.netRPCService,
+		}, {
+			Namespace: "trace",
+			Version:   "1.0",
+			Service:   NewPublicTxTraceAPI(s),
+			Public:    true,
+		}, {
+			Namespace: "pre",
+			Version:   "1.0",
+			Service:   NewPreExecAPI(s),
+			Public:    true,
 		},
 	}...)
 }
