@@ -19,6 +19,7 @@ package core
 import (
 	"math/big"
 
+	txtracelib "github.com/DeBankDeFi/etherlib/pkg/txtracev2"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -34,6 +35,9 @@ type ChainContext interface {
 
 	// GetHeader returns the header corresponding to the hash/number argument pair.
 	GetHeader(common.Hash, uint64) *types.Header
+
+	// TxTraceStore retrieves the blockchain's tx-trace store.
+	TxTraceStore() txtracelib.Store
 }
 
 // NewEVMBlockContext creates a new context for use in the EVM.

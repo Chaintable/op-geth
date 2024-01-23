@@ -78,6 +78,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/ethereum/go-ethereum/txtrace"
 )
 
 // These are all the command line flags we support.
@@ -1046,6 +1047,18 @@ Please note that --` + MetricsHTTPFlag.Name + ` must be set to start the server.
 		Value:    metrics.DefaultConfig.InfluxDBOrganization,
 		Category: flags.MetricsCategory,
 	}
+
+	// TxTraceEnabledFlag ...
+	TxTraceEnabledFlag = &cli.BoolFlag{
+		Name:     "txtrace",
+		Usage:    "Enable transaction trace while evm processing, default result is openEthereum style",
+		Category: flags.MiscCategory,
+	}
+	TxTraceStoreFlag = &flags.DirectoryFlag{
+		Name:     "txtrace.store",
+		Usage:    "Data directory for store transaction trace result (default = inside datadir)",
+		Category: flags.MiscCategory,
+	}
 )
 
 var (
@@ -1442,7 +1455,7 @@ func SetP2PConfig(ctx *cli.Context, cfg *p2p.Config) {
 	setBootstrapNodesV5(ctx, cfg)
 
 	lightClient := ctx.String(SyncModeFlag.Name) == "light"
-	lightServer := (ctx.Int(LightServeFlag.Name) != 0)
+	lightServer := ctx.Int(LightServeFlag.Name) != 0
 
 	lightPeers := ctx.Int(LightMaxPeersFlag.Name)
 	if lightClient && !ctx.IsSet(LightMaxPeersFlag.Name) {
@@ -1610,6 +1623,15 @@ func setGPO(ctx *cli.Context, cfg *gasprice.Config, light bool) {
 	}
 	if ctx.IsSet(GpoIgnoreGasPriceFlag.Name) {
 		cfg.IgnorePrice = big.NewInt(ctx.Int64(GpoIgnoreGasPriceFlag.Name))
+	}
+}
+
+func setTxTrace(ctx *cli.Context, cfg *txtrace.Config) {
+	if ctx.IsSet(TxTraceEnabledFlag.Name) {
+		cfg.Enabled = ctx.Bool(TxTraceEnabledFlag.Name)
+	}
+	if ctx.IsSet(TxTraceStoreFlag.Name) {
+		cfg.StoreDir = ctx.String(TxTraceStoreFlag.Name)
 	}
 }
 
@@ -1803,6 +1825,7 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	setMiner(ctx, &cfg.Miner)
 	setRequiredBlocks(ctx, cfg)
 	setLes(ctx, cfg)
+	setTxTrace(ctx, &cfg.TxTrace)
 
 	// Cap the cache allowance and tune the garbage collector
 	mem, err := gopsutil.VirtualMemory()

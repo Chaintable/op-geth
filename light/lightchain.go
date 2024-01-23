@@ -26,6 +26,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	txtracelib "github.com/DeBankDeFi/etherlib/pkg/txtracev2"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/lru"
 	"github.com/ethereum/go-ethereum/consensus"
@@ -139,6 +140,10 @@ func (lc *LightChain) getProcInterrupt() bool {
 // Odr returns the ODR backend of the chain
 func (lc *LightChain) Odr() OdrBackend {
 	return lc.odr
+}
+
+func (lc *LightChain) TxTraceStore() txtracelib.Store {
+	return nil
 }
 
 // HeaderChain returns the underlying header chain.

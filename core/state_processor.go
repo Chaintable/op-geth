@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math/big"
 
+	txtracelib "github.com/DeBankDeFi/etherlib/pkg/txtracev2"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/misc"
@@ -27,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -71,9 +73,13 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		misc.ApplyDAOHardFork(statedb)
 	}
 	blockContext := NewEVMBlockContext(header, p.bc, nil, p.config, statedb)
-	vmenv := vm.NewEVM(blockContext, vm.TxContext{}, statedb, p.config, cfg)
+
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
+		if cfg.Debug {
+			cfg.Tracer = txtracelib.NewOeTracer(p.bc.TxTraceStore(), header.Hash(), header.Number, tx.Hash(), uint64(statedb.TxIndex()))
+		}
+		vmenv := vm.NewEVM(blockContext, vm.TxContext{}, statedb, p.config, cfg)
 		msg, err := TransactionToMessage(tx, types.MakeSigner(p.config, header.Number), header.BaseFee)
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
@@ -85,6 +91,14 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		}
 		receipts = append(receipts, receipt)
 		allLogs = append(allLogs, receipt.Logs...)
+
+		// Finalize trace logger result and save to underlying database if necessary.
+		switch t := cfg.Tracer.(type) {
+		case *txtracelib.OeTracer:
+			log.Debug("Persist oe-style trace result to database", "blockNumber", header.Number.Int64(), "txHash", tx.Hash())
+			t.PersistTrace()
+		default:
+		}
 	}
 	// Fail if Shanghai not enabled and len(withdrawals) is non-zero.
 	withdrawals := block.Withdrawals()
@@ -162,8 +176,24 @@ func ApplyTransaction(config *params.ChainConfig, bc ChainContext, author *commo
 	if err != nil {
 		return nil, err
 	}
+	if cfg.Debug {
+		cfg.Tracer = txtracelib.NewOeTracer(bc.TxTraceStore(), header.Hash(), header.Number, tx.Hash(), uint64(statedb.TxIndex()))
+	}
 	// Create a new context to be used in the EVM environment
 	blockContext := NewEVMBlockContext(header, bc, author, config, statedb)
 	vmenv := vm.NewEVM(blockContext, vm.TxContext{}, statedb, config, cfg)
-	return applyTransaction(msg, config, gp, statedb, header.Number, header.Hash(), tx, usedGas, vmenv)
+	receipt, err := applyTransaction(msg, config, gp, statedb, header.Number, header.Hash(), tx, usedGas, vmenv)
+	if err != nil {
+		return nil, err
+	}
+
+	// Finalize trace logger result and save to underlying database if necessary.
+	switch t := cfg.Tracer.(type) {
+	case *txtracelib.OeTracer:
+		log.Debug("Persist oe-style trace result to database", "blockNumber", header.Number.Int64(), "txHash", tx.Hash())
+		t.PersistTrace()
+	default:
+	}
+
+	return receipt, nil
 }

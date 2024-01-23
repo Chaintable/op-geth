@@ -29,6 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	txtracelib "github.com/DeBankDeFi/etherlib/pkg/txtracev2"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/lru"
 	"github.com/ethereum/go-ethereum/common/mclock"
@@ -48,6 +49,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
+	"github.com/ethereum/go-ethereum/txtrace"
 )
 
 var (
@@ -166,8 +168,11 @@ var defaultCacheConfig = &CacheConfig{
 // included in the canonical one where as GetBlockByNumber always represents the
 // canonical chain.
 type BlockChain struct {
-	chainConfig *params.ChainConfig // Chain & network configuration
-	cacheConfig *CacheConfig        // Cache configuration for pruning
+	chainConfig   *params.ChainConfig // Chain & network configuration
+	cacheConfig   *CacheConfig        // Cache configuration for pruning
+	txTraceConfig *txtrace.Config
+	// txtraceStore
+	txTraceStore txtracelib.Store
 
 	db            ethdb.Database                   // Low level persistent database to store final content in
 	snaps         *snapshot.Tree                   // Snapshot tree for fast trie leaf access
@@ -224,6 +229,19 @@ type BlockChain struct {
 	processor  Processor // Block transaction processor interface
 	forker     *ForkChoice
 	vmConfig   vm.Config
+}
+
+// NewBlockChainV2 returns a fully initialised blockchain using information
+// available in the database. It initialises the default Ethereum Validator and
+// Processor. The different between NewBlockChainV2 and NewBlockchain are additional txtrace.Config and txtracelib.Store parameter will passed.
+func NewBlockChainV2(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis, overrides *ChainOverrides, engine consensus.Engine, vmConfig vm.Config, shouldPreserve func(block *types.Header) bool, txLookupLimit *uint64, txTraceConfig *txtrace.Config, txStore txtracelib.Store) (*BlockChain, error) {
+	bc, err := NewBlockChain(db, cacheConfig, genesis, overrides, engine, vmConfig, shouldPreserve, txLookupLimit)
+	if err != nil {
+		return nil, err
+	}
+	bc.txTraceConfig = txTraceConfig
+	bc.txTraceStore = txStore
+	return bc, nil
 }
 
 // NewBlockChain returns a fully initialised block chain using information
@@ -641,7 +659,7 @@ func (bc *BlockChain) setHeadBeyondRoot(head uint64, time uint64, root common.Ha
 				// Block exists, keep rewinding until we find one with state,
 				// keeping rewinding until we exceed the optional threshold
 				// root hash
-				beyondRoot := (root == common.Hash{}) // Flag whether we're beyond the requested root (no root, always true)
+				beyondRoot := root == common.Hash{} // Flag whether we're beyond the requested root (no root, always true)
 
 				for {
 					// If a root threshold was requested but not yet crossed, check
@@ -2501,4 +2519,12 @@ func (bc *BlockChain) SetBlockValidatorAndProcessorForTesting(v Validator, p Pro
 // It is thread-safe and can be called repeatedly without side effects.
 func (bc *BlockChain) SetTrieFlushInterval(interval time.Duration) {
 	bc.flushInterval.Store(int64(interval))
+}
+
+// TxTraceStore retrieves the blockchain's tx-trace store.
+func (bc *BlockChain) TxTraceStore() txtracelib.Store { return bc.txTraceStore }
+
+// GetTrieFlushInterval gets the in-memory tries flush interval
+func (bc *BlockChain) GetTrieFlushInterval() time.Duration {
+	return time.Duration(bc.flushInterval.Load())
 }
