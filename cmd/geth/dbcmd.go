@@ -199,7 +199,7 @@ WARNING: This is a low-level operation which may cause database corruption!`,
 		Name:        "set-finalized",
 		Usage:       "Set finalized block to specified hash(or to latest hash if not specified)",
 		ArgsUsage:   "<hex-encoded block hash>",
-		Flags:       flags.Merge(utils.NetworkFlags, utils.DatabaseFlags),
+		Flags:       flags.Merge(utils.NetworkFlags, utils.DatabasePathFlags),
 		Description: "Set finalized block to specified hash(or to latest hash if not specified)",
 	}
 )
