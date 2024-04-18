@@ -1,9 +1,10 @@
-name: manta build
+name: manta release
 
 on:
-  pull_request:
-    branches:
-      - "chain/manta"
+  push:
+  release:
+    types:
+      - created
   workflow_dispatch:
 
 env:
@@ -34,8 +35,8 @@ jobs:
 
       - name: Set env
         run: |
-          # echo "REVISION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
-          echo "REVISION=${GITHUB_SHA::8}" >> $GITHUB_ENV
+          echo "REVISION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
+          #echo "REVISION=${GITHUB_SHA::8}" >> $GITHUB_ENV
       - name: Docker build and push
         run: |
           docker build --build-arg ACCESS_TOKEN=${{ steps.generate-token.outputs.token }} -t ${REGISTRY}/${IMAGE}:${REVISION} -f ${DOCKERFILE} .
