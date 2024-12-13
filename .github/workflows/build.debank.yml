@@ -1,0 +1,116 @@
+name: "Build new artifacts"
+
+on:
+  pull_request:
+    branches:
+      - "debank"
+  workflow_dispatch:
+
+env:
+  BUILT_BINARY_PATH: build/bin
+  BUILT_BINARY_NAME: geth
+  ARCHIVE_FILE_NAME: eth-latest-linux-amd64
+  ARCHIVE_BUCKET: debank-build-artifacts
+  ARCHIVE_FILE_PREFIX: downloads/ethereum
+  AWS_REGION: ap-northeast-1
+  REGISTRY: 294354037686.dkr.ecr.ap-northeast-1.amazonaws.com
+  IMAGE: blockchain-op-gethx
+  DOCKERFILE: Dockerfile.debank
+
+jobs:
+  build-artifacts:
+    strategy:
+      matrix:
+        arch: [amd64]
+    runs-on: [self-hosted, "${{ matrix.arch }}"]
+    steps:
+      - name: Install Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.21.x
+
+      - name: Checkout code
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: tibdex/github-app-token@v1
+        id: generate-token
+        with:
+          app_id: ${{ secrets.RELEASE_MANAGER_APP_ID }}
+          private_key: ${{ secrets.RELEASE_MANAGER_APP_SECRET }}
+
+      - name: Make binaries
+        run: |
+          rm -f ~/.gitconfig
+          git config --global url."https://x-access-token:${{ steps.generate-token.outputs.token }}@github.com".insteadOf "https://github.com"
+          make
+          docker system prune -f
+
+      - name: Set env
+        run: |
+          echo "REVISION=$(git rev-parse --short=8 HEAD)" >> $GITHUB_ENV
+          echo "ARCHIVE_FILE_NAME=eth-$(git rev-parse --short=8 HEAD)-linux-${{ matrix.arch }}" >> $GITHUB_ENV
+
+      - name: Archive artifacts
+        run: |
+          mkdir $ARCHIVE_FILE_NAME
+          cp $BUILT_BINARY_PATH/$BUILT_BINARY_NAME $ARCHIVE_FILE_NAME/$BUILT_BINARY_NAME
+          sha256sum $ARCHIVE_FILE_NAME/$BUILT_BINARY_NAME --tag >> $ARCHIVE_FILE_NAME/sha256.checksum
+          chmod u+x $ARCHIVE_FILE_NAME/$BUILT_BINARY_NAME
+          $ARCHIVE_FILE_NAME/$BUILT_BINARY_NAME version
+          tar cvfz $ARCHIVE_FILE_NAME.tar.gz $ARCHIVE_FILE_NAME
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Copy artifacts to s3
+        run: |
+          aws s3 cp $ARCHIVE_FILE_NAME.tar.gz s3://$ARCHIVE_BUCKET/$ARCHIVE_FILE_PREFIX/$ARCHIVE_FILE_NAME.tar.gz --acl public-read
+
+      - name: Lark Notification
+        continue-on-error: true
+        run: |
+          notiv3 "Blockchain Ethereum artifacts uploaded 🎉" https://${{ env.ARCHIVE_BUCKET }}.s3.${{ env.AWS_REGION }}.amazonaws.com/${{ env.ARCHIVE_FILE_PREFIX }}/${{ env.ARCHIVE_FILE_NAME }}.tar.gz
+
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build image and push to ECR
+        uses:  docker/build-push-action@v5
+        with:
+          file: ${{ env.DOCKERFILE }}
+          context: .
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ matrix.arch }}-${{ env.REVISION }}
+          build-args: ACCESS_TOKEN=${{ steps.generate-token.outputs.token }}
+          provenance: false
+
+
+  merge-docker-manifest:
+    runs-on: [self-hosted, ops]
+    needs: build-artifacts
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set env
+        run: |
+          echo "REVISION=$(git rev-parse --short=8 HEAD)" >> $GITHUB_ENV
+
+      - name: Merge manifest
+        run: |
+          docker pull --platform=linux/amd64 ${REGISTRY}/${IMAGE}:amd64-${REVISION}
+          docker pull --platform=linux/arm64 ${REGISTRY}/${IMAGE}:arm64-${REVISION}
+          docker buildx imagetools create --tag ${REGISTRY}/${IMAGE}:${REVISION} ${REGISTRY}/${IMAGE}:amd64-${REVISION} ${REGISTRY}/${IMAGE}:arm64-${REVISION}
+
+      - name: Lark Notification
+        continue-on-error: true
+        run: |
+          notiv3 "Blockchain Ethereum image pushed 🎉" ${REGISTRY}/${IMAGE}:${REVISION}

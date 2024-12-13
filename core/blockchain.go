@@ -20,14 +20,17 @@ package core
 import (
 	"errors"
 	"fmt"
+	"github.com/Chaintable/pipeline/tracer"
 	"io"
 	"math/big"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	ptypes "github.com/Chaintable/pipeline/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/lru"
 	"github.com/ethereum/go-ethereum/common/mclock"
@@ -414,8 +417,11 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 	if bc.logger != nil && bc.logger.OnBlockchainInit != nil {
 		bc.logger.OnBlockchainInit(chainConfig)
 	}
+
+	log.Info("Initialised blockchain", "head", bc.CurrentHeader().Number, "hash", bc.CurrentHeader().Hash())
 	if bc.logger != nil && bc.logger.OnGenesisBlock != nil {
 		if block := bc.CurrentBlock(); block.Number.Uint64() == 0 {
+			log.Info("Genesis block is set", "hash", block.Hash())
 			alloc, err := getGenesisState(bc.db, block.Hash())
 			if err != nil {
 				return nil, fmt.Errorf("failed to get genesis state: %w", err)
@@ -1539,6 +1545,64 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	return nil
 }
 
+// 返回两个块的共同祖先，以及两个块的从共同祖先到两个块的路径,即drop和new
+func (bc *BlockChain) getCommonAncestor(blocka ptypes.BlockContext, blockb ptypes.BlockContext) (ptypes.BlockContext, []ptypes.BlockContext, []ptypes.BlockContext) {
+	var (
+		chainA, chainB []ptypes.BlockContext
+	)
+	if blockb.ParentHash == blocka.Hash {
+		return blocka, chainA, []ptypes.BlockContext{blockb}
+	}
+	for blockb.BlockNumber > blocka.BlockNumber {
+		chainB = append(chainB, blockb)
+		headerb := bc.GetHeaderByHash(blockb.ParentHash)
+		if headerb == nil {
+			log.Crit("Failed to get header by hash", "hash", blockb.ParentHash)
+		} else {
+			blockb = ptypes.BlockContext{
+				BlockNumber: headerb.Number.Uint64(),
+				Hash:        headerb.Hash(),
+				ParentHash:  headerb.ParentHash,
+				Timestamp:   headerb.Time,
+			}
+		}
+	}
+	for blocka.Hash != blockb.Hash {
+		chainA = append(chainA, blocka)
+		headera := bc.GetHeaderByHash(blocka.ParentHash)
+		if headera == nil {
+			log.Crit("Failed to get header by hash", "hash", blocka.ParentHash)
+		} else {
+			blocka = ptypes.BlockContext{
+				BlockNumber: headera.Number.Uint64(),
+				Hash:        headera.Hash(),
+				ParentHash:  headera.ParentHash,
+				Timestamp:   headera.Time,
+			}
+		}
+
+		chainB = append(chainB, blockb)
+		headerb := bc.GetHeaderByHash(blockb.ParentHash)
+		if headerb == nil {
+			log.Crit("Failed to get header by hash", "hash", blockb.ParentHash)
+		} else {
+			blockb = ptypes.BlockContext{
+				BlockNumber: headerb.Number.Uint64(),
+				Hash:        headerb.Hash(),
+				ParentHash:  headerb.ParentHash,
+				Timestamp:   headerb.Time,
+			}
+		}
+	}
+	// now blocka == blockb == ancestor
+
+	// reverse chainA
+	slices.Reverse(chainA)
+	// reverse chainB
+	slices.Reverse(chainB)
+	return blocka, chainA, chainB
+}
+
 // writeBlockAndSetHead is the internal implementation of WriteBlockAndSetHead.
 // This function expects the chain mutex to be held.
 func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types.Receipt, logs []*types.Log, state *state.StateDB, emitHeadEvent bool) (status WriteStatus, err error) {
@@ -1556,6 +1620,35 @@ func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types
 
 	// Set new head.
 	bc.writeHeadBlock(block)
+
+	// 先确保 pipeline tracer 不为空，然后再判断是否需要push kafka
+	// 上一个push kafka的block, 必然存在(至少有genesis block)
+	// 上一个push kafka的block比当前的head block还要新，说明有unwind回退，不需要处理, 即使是fork，等有更新的block的时候再一起push
+	if tracer.NodeXPusher != nil && tracer.NodeXPusher.LastBlockNotice.NewBlocks[0].BlockNumber <= block.NumberU64() {
+		lastPushBlock := tracer.NodeXPusher.LastBlockNotice.NewBlocks[0]
+		_, dropBlocks, newBlocks := bc.getCommonAncestor(lastPushBlock, ptypes.BlockContext{
+			BlockNumber: block.NumberU64(),
+			Hash:        block.Hash(),
+			ParentHash:  block.ParentHash(),
+			Timestamp:   block.Time(),
+		})
+		if len(dropBlocks) > 0 {
+			tracer.BlockCtx.BlockChange = &ptypes.BlockChangeNotification{
+				ChangeType: 2,
+				NewBlocks:  newBlocks,
+				DropBlocks: dropBlocks,
+			}
+		} else if len(newBlocks) > 0 {
+			tracer.BlockCtx.BlockChange = &ptypes.BlockChangeNotification{
+				ChangeType: 1,
+				NewBlocks:  newBlocks,
+			}
+		}
+
+		log.Debug("writeBlockAndSetHead New BlockChangeNotification")
+	} else {
+		log.Debug("writeBlockAndSetHead NodeXPusher is nil or LastBlockNotice.NewBlocks[0].BlockNumber <= block.NumberU64()")
+	}
 
 	bc.chainFeed.Send(ChainEvent{Block: block, Hash: block.Hash(), Logs: logs})
 	if len(logs) > 0 {
