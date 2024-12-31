@@ -1,3 +1,6 @@
+# Multi arch target
+ARG TARGETARCH
+
 # Support setting various labels on the final image
 ARG COMMIT=""
 ARG VERSION=""
@@ -14,7 +17,7 @@ COPY go.sum /go-ethereum/
 RUN cd /go-ethereum && go mod download
 
 ADD . /go-ethereum
-RUN cd /go-ethereum && go run build/ci.go install -static ./cmd/geth
+RUN cd /go-ethereum && go run build/ci.go install -static -arch=$TARGETARCH ./cmd/geth
 
 # Pull Geth into a second stage deploy alpine container
 FROM alpine:3.22
