@@ -69,28 +69,62 @@ func TestEnsureCreate2Deployer(t *testing.T) {
 				tt.override(&cfg)
 			}
 			state := &stateDb{
-				codeExists: tt.codeExists,
+				codeMap: map[common.Address][]byte{},
 			}
 			EnsureCreate2Deployer(&cfg, tt.timestamp, state)
-			assert.Equal(t, tt.applied, state.codeSet)
+			assert.Equal(t, tt.applied, state.GetCodeSize(create2DeployerAddress) > 0)
 		})
 	}
 }
 
 type stateDb struct {
 	vm.StateDB
-	codeExists bool
-	codeSet    bool
+	codeMap map[common.Address][]byte
+	storage map[common.Address]map[common.Hash]common.Hash
 }
 
-func (s *stateDb) GetCodeSize(_ common.Address) int {
-	if s.codeExists {
-		return 1
-	}
-	return 0
+func (s *stateDb) GetCode(addr common.Address) []byte {
+	s.initCodeMap()
+	return s.codeMap[addr]
 }
 
-func (s *stateDb) SetCode(_ common.Address, _ []byte) []byte {
-	s.codeSet = true
+func (s *stateDb) GetCodeSize(addr common.Address) int {
+	s.initCodeMap()
+	return len(s.codeMap[addr])
+}
+
+func (s *stateDb) SetCode(addr common.Address, code []byte) []byte {
+	s.initCodeMap()
+	s.codeMap[addr] = code
 	return nil
+}
+
+func (s *stateDb) initCodeMap() {
+	if s.codeMap == nil {
+		s.codeMap = make(map[common.Address][]byte)
+	}
+}
+
+func (s *stateDb) GetState(addr common.Address, key common.Hash) common.Hash {
+	if s.storage == nil {
+		return common.Hash{}
+	}
+	if _, ok := s.storage[addr]; !ok {
+		return common.Hash{}
+	}
+
+	return s.storage[addr][key]
+}
+
+func (s *stateDb) SetState(addr common.Address, key common.Hash, value common.Hash) common.Hash {
+	if s.storage == nil {
+		s.storage = make(map[common.Address]map[common.Hash]common.Hash)
+	}
+	if _, ok := s.storage[addr]; !ok {
+		s.storage[addr] = map[common.Hash]common.Hash{key: value}
+	} else {
+		s.storage[addr][key] = value
+	}
+
+	return common.Hash{}
 }
