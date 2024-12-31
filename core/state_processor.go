@@ -70,6 +70,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		misc.ApplyDAOHardFork(statedb)
 	}
 	misc.EnsureCreate2Deployer(p.config, block.Time(), statedb)
+	misc.EnsureFrxUSD(p.config, block.Time(), statedb)
 	var (
 		context vm.BlockContext
 		signer  = types.MakeSigner(p.config, header.Number, header.Time)
