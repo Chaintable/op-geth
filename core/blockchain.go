@@ -20,7 +20,6 @@ package core
 import (
 	"errors"
 	"fmt"
-	"github.com/Chaintable/pipeline/tracer"
 	"io"
 	"math/big"
 	"runtime"
@@ -30,6 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Chaintable/pipeline/tracer"
 	ptypes "github.com/Chaintable/pipeline/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/lru"
@@ -2499,6 +2499,41 @@ func (bc *BlockChain) SetCanonical(head *types.Block) (common.Hash, error) {
 	}
 	bc.writeHeadBlock(head)
 
+	// 先确保 pipeline tracer 不为空，然后再判断是否需要push kafka
+	// 上一个push kafka的block, 必然存在(至少有genesis block)
+	// 上一个push kafka的block比当前的head block还要新，说明有unwind回退，不需要处理, 即使是fork，等有更新的block的时候再一起push
+	if tracer.NodeXPusher != nil && tracer.NodeXPusher.LastBlockNotice.NewBlocks[0].BlockNumber <= head.NumberU64() {
+		lastPushBlock := tracer.NodeXPusher.LastBlockNotice.NewBlocks[0]
+		_, dropBlocks, newBlocks := bc.getCommonAncestor(lastPushBlock, ptypes.BlockContext{
+			BlockNumber: head.NumberU64(),
+			Hash:        head.Hash(),
+			ParentHash:  head.ParentHash(),
+			Timestamp:   head.Time(),
+		})
+		var blockChange *ptypes.BlockChangeNotification
+		if len(dropBlocks) > 0 {
+			blockChange = &ptypes.BlockChangeNotification{
+				ChangeType: 2,
+				NewBlocks:  newBlocks,
+				DropBlocks: dropBlocks,
+			}
+		} else if len(newBlocks) > 0 {
+			blockChange = &ptypes.BlockChangeNotification{
+				ChangeType: 1,
+				NewBlocks:  newBlocks,
+			}
+		}
+
+		err := tracer.NodeXPusher.PushBlockChangeNotification(blockChange)
+		if err != nil {
+			log.Error("SetCanonical PushBlockChangeNotification error", "err", err)
+		}
+		log.Info("NodeXPusher PushBlockChangeNotification", "blockChange", blockChange)
+
+		log.Debug("SetCanonical New BlockChangeNotification")
+	} else {
+		log.Debug("SetCanonical NodeXPusher is nil or LastBlockNotice.NewBlocks[0].BlockNumber <= block.NumberU64()")
+	}
 	// Emit events
 	logs := bc.collectLogs(head, false)
 	bc.chainFeed.Send(ChainEvent{Block: head, Hash: head.Hash(), Logs: logs})

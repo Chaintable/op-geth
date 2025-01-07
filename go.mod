@@ -6,7 +6,7 @@ toolchain go1.22.9
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.2.0
-	github.com/Chaintable/pipeline v0.0.27
+	github.com/Chaintable/pipeline v0.0.33
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/VictoriaMetrics/fastcache v1.12.2
 	github.com/aws/aws-sdk-go-v2 v1.32.5
@@ -25,8 +25,8 @@ require (
 	github.com/donovanhide/eventsource v0.0.0-20210830082556-c59027999da0
 	github.com/dop251/goja v0.0.0-20230806174421-c933cf95e127
 	github.com/ethereum-optimism/superchain-registry/superchain v0.0.0-20241213092551-33a63fce8214
-	github.com/ethereum/c-kzg-4844 v1.0.0
-	github.com/ethereum/go-verkle v0.1.1-0.20240829091221-dffa7562dbe9
+	github.com/ethereum/c-kzg-4844 v1.0.3
+	github.com/ethereum/go-verkle v0.2.2
 	github.com/fatih/color v1.16.0
 	github.com/ferranbt/fastssz v0.1.2
 	github.com/fjl/gencodec v0.0.0-20230517082657-f9840df7b83e
