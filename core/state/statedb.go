@@ -621,7 +621,9 @@ func (s *StateDB) getStateObject(addr common.Address) *stateObject {
 		return nil
 	}
 	s.AccountReads += time.Since(start)
-
+	if s.logger != nil && s.logger.OnAccountRead != nil {
+		s.logger.OnAccountRead(addr)
+	}
 	// Short circuit if the account is not found
 	if acct == nil {
 		return nil

@@ -171,6 +171,12 @@ type (
 
 	// CommitHook is called when the state is committed.
 	CommitHook = func(originRoot common.Hash, root common.Hash, destructs map[common.Hash]struct{}, accounts map[common.Hash][]byte, accountsOrigin map[common.Address][]byte, storages map[common.Hash]map[common.Hash][]byte, storagesOrigin map[common.Address]map[common.Hash][]byte, codes map[common.Hash][]byte)
+
+	// AccountReadHook is called when an account is read.
+	AccountReadHook = func(addr common.Address)
+
+	// StorageReadHook is called when a storage slot is read.
+	StorageReadHook = func(addr common.Address, slot common.Hash)
 )
 
 type Hooks struct {
@@ -199,7 +205,9 @@ type Hooks struct {
 	OnLog           LogHook
 
 	// custom hook
-	OnCommit CommitHook
+	OnCommit      CommitHook
+	OnAccountRead AccountReadHook
+	OnStorageRead StorageReadHook
 }
 
 // BalanceChangeReason is used to indicate the reason for a balance change, useful
