@@ -144,6 +144,7 @@ func (miner *Miner) generateWork(params *generateParams, witness bool) *newPaylo
 
 	misc.EnsureCreate2Deployer(miner.chainConfig, work.header.Time, work.state)
 	misc.EnsureFrxUSD(miner.chainConfig, work.header.Time, work.state)
+	misc.EnsureFraxTokensProxies(miner.chainConfig, work.header.Time, work.state)
 
 	for _, tx := range params.txs {
 		from, _ := types.Sender(work.signer, tx)
