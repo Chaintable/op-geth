@@ -75,6 +75,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	}
 	misc.EnsureCreate2Deployer(config, block.Time(), statedb)
 	misc.EnsureFrxUSD(config, block.Time(), statedb)
+	misc.EnsureFraxTokensProxies(config, block.Time(), statedb)
 	var (
 		context vm.BlockContext
 		signer  = types.MakeSigner(config, header.Number, header.Time)
