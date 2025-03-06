@@ -205,9 +205,7 @@ type Hooks struct {
 	OnLog           LogHook
 
 	// custom hook
-	OnCommit      CommitHook
-	OnAccountRead AccountReadHook
-	OnStorageRead StorageReadHook
+	OnCommit CommitHook
 }
 
 // BalanceChangeReason is used to indicate the reason for a balance change, useful
