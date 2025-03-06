@@ -125,6 +125,14 @@ func ApplyTransactionWithEVM(msg *Message, config *params.ChainConfig, gp *GasPo
 		evm.Config.Tracer.OnTxStart(evm.GetVMContext(), tx, msg.From)
 		if evm.Config.Tracer.OnTxEnd != nil {
 			defer func() {
+				receipt.SetEffectiveGasPrice(tx, evm.Context.BaseFee)
+				if evm.Context.L1CostFunc != nil && !tx.IsDepositTx() && receipt.GasUsed > 0 {
+					l1Fee := evm.Context.L1CostFunc(tx.RollupCostData(), evm.Context.Time)
+					if l1Fee != nil && l1Fee.Cmp(common.Big0) > 0 {
+						gasUsed := new(big.Int).SetUint64(receipt.GasUsed)
+						receipt.EffectiveGasPrice = new(big.Int).Div(new(big.Int).Add(l1Fee, new(big.Int).Mul(receipt.EffectiveGasPrice, gasUsed)), gasUsed)
+					}
+				}
 				evm.Config.Tracer.OnTxEnd(receipt, err)
 			}()
 		}
