@@ -1,9 +1,9 @@
-name: "Build new artifacts"
+name: "Release new artifacts"
 
 on:
-  pull_request:
-    branches:
-      - "debank"
+  release:
+    types:
+      - created
   workflow_dispatch:
 
 env:
@@ -37,7 +37,7 @@ jobs:
 
       - name: Set env
         run: |
-          echo "REVISION=$(git rev-parse --short=8 HEAD)" >> $GITHUB_ENV
+          echo "REVISION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
 
       - name: Login to Amazon ECR
         id: login-ecr
