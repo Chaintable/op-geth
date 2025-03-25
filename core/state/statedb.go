@@ -1319,6 +1319,22 @@ func (s *StateDB) commitAndFlush(block uint64, deleteEmptyObjects bool) (*stateU
 			}
 			s.SnapshotCommits += time.Since(start)
 		}
+		if s.logger != nil {
+			contracts := make(map[common.Hash][]byte)
+			for _, code := range ret.codes {
+				contracts[code.hash] = code.blob
+			}
+			s.logger.OnCommit(
+				ret.originRoot,
+				ret.root,
+				ret.destructs,
+				ret.accounts,
+				ret.accountsOrigin,
+				ret.storages,
+				ret.storagesOrigin,
+				contracts,
+			)
+		}
 		// If trie database is enabled, commit the state update as a new layer
 		if db := s.db.TrieDB(); db != nil {
 			start := time.Now()
