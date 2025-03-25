@@ -1348,6 +1348,7 @@ func (s *StateDB) commitAndFlush(block uint64, deleteEmptyObjects bool, noStorag
 					accounts[k] = v
 				}
 			}
+			log.Info("Committing state", "root", ret.root, "origin", ret.originRoot, "accounts", len(accounts), "destructs", len(destructs), "contracts", len(contracts), "storages", len(ret.storages))
 			s.OnCommit(
 				ret.originRoot,
 				ret.root,

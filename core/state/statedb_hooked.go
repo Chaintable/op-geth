@@ -24,6 +24,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/trie/utils"
 	"github.com/holiman/uint256"
@@ -42,6 +43,7 @@ func NewHookedState(stateDb *StateDB, hooks *tracing.Hooks) *hookedStateDB {
 	if s.hooks == nil {
 		s.hooks = new(tracing.Hooks)
 		if s.hooks.OnCommit != nil {
+			log.Info("OnCommit hook set on stateDB")
 			stateDb.SetOnCommitLogger(s.hooks.OnCommit)
 		}
 	}
