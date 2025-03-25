@@ -7,11 +7,6 @@ on:
   workflow_dispatch:
 
 env:
-  BUILT_BINARY_PATH: build/bin
-  BUILT_BINARY_NAME: geth
-  ARCHIVE_FILE_NAME: eth-latest-linux-amd64
-  ARCHIVE_BUCKET: debank-build-artifacts
-  ARCHIVE_FILE_PREFIX: downloads/ethereum
   AWS_REGION: ap-northeast-1
   REGISTRY: 294354037686.dkr.ecr.ap-northeast-1.amazonaws.com
   IMAGE: blockchain-op-gethx
