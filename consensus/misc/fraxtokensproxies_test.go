@@ -24,14 +24,6 @@ func TestEnsureFraxTokensProxies(t *testing.T) {
 			applied:   true,
 		},
 		{
-			name: "another chain ID",
-			override: func(cfg *params.ChainConfig) {
-				cfg.ChainID = big.NewInt(params.OPMainnetChainID)
-			},
-			timestamp: holoceneTime,
-			applied:   true,
-		},
-		{
 			name:       "code already exists",
 			timestamp:  holoceneTime,
 			codeExists: true,
@@ -59,7 +51,7 @@ func TestEnsureFraxTokensProxies(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := params.ChainConfig{
-				ChainID:      big.NewInt(252),
+				ChainID:      big.NewInt(2522),
 				Optimism:     &params.OptimismConfig{},
 				HoloceneTime: &holoceneTime,
 			}

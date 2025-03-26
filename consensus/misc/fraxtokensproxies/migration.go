@@ -9,9 +9,12 @@ import (
 )
 
 func RunMigration(c *params.ChainConfig, timestamp uint64, db vm.StateDB) {
-	log.Info("Migrating frax tokens to proxies")
+	log.Info("Holocene frax tokens migration")
 
 	var tokensAddresses []common.Address
+	var bytecodeChanges []bytecodeChange
+	var storageChanges []storageChange
+
 	proxyCode := db.GetCode(proxyCodeAddress)
 	switch c.ChainID.Int64() {
 	case 2521:
@@ -20,7 +23,10 @@ func RunMigration(c *params.ChainConfig, timestamp uint64, db vm.StateDB) {
 		tokensAddresses = testnetTokensAddresses
 	default:
 		tokensAddresses = mainnetTokensAddresses
+		bytecodeChanges = mainnetNamingBytecodeChanges
+		storageChanges = mainnetNamingStorageChanges
 	}
+
 	for _, addr := range tokensAddresses {
 		implementationAddress := addr
 		copy(implementationAddress[:4], []byte{252, 192, 211})
@@ -30,5 +36,15 @@ func RunMigration(c *params.ChainConfig, timestamp uint64, db vm.StateDB) {
 		db.SetState(addr, proxyImplementationSlot, common.BytesToHash(common.LeftPadBytes(implementationAddress.Bytes(), common.HashLength)))
 	}
 
-	log.Info("Migration of frax tokens complete")
+	for _, c := range bytecodeChanges {
+		originalCode := db.GetCode(c.address)
+		copy(originalCode[c.offset:], c.value)
+		db.SetCode(c.address, originalCode, tracing.CodeChangeUnspecified)
+	}
+
+	for _, c := range storageChanges {
+		db.SetState(c.address, c.storageSlot, common.Hash(c.value))
+	}
+
+	log.Info("Holocene frax tokens migration done")
 }
