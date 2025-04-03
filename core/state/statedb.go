@@ -25,6 +25,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
@@ -138,6 +139,7 @@ type StateDB struct {
 
 	// Testing hooks
 	onCommit func(states *triestate.Set) // Hook invoked when commit is performed
+	hooks    *tracing.Hooks
 }
 
 // New creates a new state from a given trie.
@@ -206,12 +208,19 @@ func (s *StateDB) Error() error {
 	return s.dbErr
 }
 
+func (s *StateDB) SetHooks(hooks *tracing.Hooks) {
+	s.hooks = hooks
+}
+
 func (s *StateDB) AddLog(log *types.Log) {
 	s.journal.append(addLogChange{txhash: s.thash})
 
 	log.TxHash = s.thash
 	log.TxIndex = uint(s.txIndex)
 	log.Index = s.logSize
+	if s.hooks != nil && s.hooks.OnLog != nil {
+		s.hooks.OnLog(log)
+	}
 	s.logs[s.thash] = append(s.logs[s.thash], log)
 	s.logSize++
 }
@@ -1181,6 +1190,7 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 	if err != nil {
 		return common.Hash{}, err
 	}
+	codes := make(map[common.Hash][]byte)
 	// Handle all state updates afterwards
 	for addr := range s.stateObjectsDirty {
 		obj := s.stateObjects[addr]
@@ -1190,6 +1200,7 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 		// Write any contract code associated with the state object
 		if obj.code != nil && obj.dirtyCode {
 			rawdb.WriteCode(codeWriter, common.BytesToHash(obj.CodeHash()), obj.code)
+			codes[common.BytesToHash(obj.CodeHash())] = obj.code
 			obj.dirtyCode = false
 		}
 		// Write any storage changes in the state object to its storage trie
@@ -1272,6 +1283,11 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 	if origin == (common.Hash{}) {
 		origin = types.EmptyRootHash
 	}
+	destructs := s.convertAccountSet(s.stateObjectsDestruct)
+	if s.hooks != nil && s.hooks.OnCommit != nil {
+		s.hooks.OnCommit(origin, root, destructs, s.accounts, nil, s.storages, nil, codes)
+	}
+
 	if root != origin {
 		start := time.Now()
 		set := triestate.New(s.accountsOrigin, s.storagesOrigin, incomplete)

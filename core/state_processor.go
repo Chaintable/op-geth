@@ -25,10 +25,13 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/misc"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/pipeline/tracer"
 )
 
 // StateProcessor is a basic Processor, which takes care of transitioning
@@ -81,13 +84,26 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		ProcessBeaconBlockRoot(*beaconRoot, vmenv, statedb)
 	}
 	// Iterate over and process the individual transactions
+	var pipelineTracer *tracer.PipelineTracer
+	if p, ok := cfg.Tracer.(*tracer.PipelineTracer); !ok {
+		log.Crit("vmConfig.Tracer must be a pipeline.Tracer")
+	} else {
+		pipelineTracer = p
+	}
+	statedb.SetHooks(tracing.BuildHooks(pipelineTracer))
 	for i, tx := range block.Transactions() {
 		msg, err := TransactionToMessage(tx, signer, header.BaseFee)
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 		}
 		statedb.SetTxContext(tx.Hash(), i)
+		if pipelineTracer != nil {
+			pipelineTracer.OnTxStart(tx, msg.From)
+		}
 		receipt, err := applyTransaction(msg, p.config, gp, statedb, blockNumber, blockHash, tx, usedGas, vmenv)
+		if pipelineTracer != nil {
+			pipelineTracer.OnTxEnd(receipt, err)
+		}
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 		}
