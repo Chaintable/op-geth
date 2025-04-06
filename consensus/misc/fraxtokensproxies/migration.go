@@ -38,6 +38,7 @@ func RunMigration(c *params.ChainConfig, timestamp uint64, db vm.StateDB) {
 	for _, c := range bytecodeChanges {
 		originalCode := db.GetCode(c.address)
 		copy(originalCode[c.offset:], c.value)
+		db.SetCode(c.address, originalCode)
 	}
 
 	for _, c := range storageChanges {
