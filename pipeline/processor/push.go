@@ -44,6 +44,8 @@ func NewPushProcessor(region string, bucket string, brokers []string, topic stri
 		return nil, err
 	}
 
+	log.Printf("last block notice: %+v\n", lastBlockNotice)
+
 	if s3TempDir != "" {
 		s3TempDir = filepath.Join(s3TempDir, bucket)
 	}
