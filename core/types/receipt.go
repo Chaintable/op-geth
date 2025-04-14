@@ -178,6 +178,7 @@ type LegacyOptimismStoredReceiptRLP struct {
 	L1GasPrice *big.Int `rlp:"optional"` // OVM Legacy
 	L1Fee      *big.Int `rlp:"optional"` // OVM Legacy
 	FeeScalar  string   `rlp:"optional"` // OVM Legacy
+	L2BobaFee  *big.Int `rlp:"optional"` // OVM Legacy (Boba)
 }
 
 // LogForStorage is a wrapper around a Log that handles
