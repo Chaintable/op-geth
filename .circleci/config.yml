@@ -3,7 +3,6 @@ version: 2.1
 orbs:
   gcp-cli: circleci/gcp-cli@3.0.1
   slack: circleci/slack@4.10.1
-  utils: ethereum-optimism/circleci-utils@1.0.13
 
 parameters:
   go_version:
@@ -53,39 +52,6 @@ commands:
             echo "export GOOGLE_APPLICATION_CREDENTIALS='<< parameters.gcp_cred_config_file_path >>'" | tee -a "$BASH_ENV"
 
 jobs:
-  build-and-deploy:
-    machine:
-      image: ubuntu-2004:current
-    steps:
-      - checkout
-      # Fetch more history for diffing
-      - run:
-          name: Fetch git history
-          command: |
-            git fetch --depth 1000
-
-      # Build forkdiff using Docker
-      - run:
-          name: Build forkdiff
-          command: |
-            docker run --volume $(pwd):/workspace \
-              protolambda/forkdiff:0.1.1 \
-              -repo=/workspace \
-              -fork=/workspace/fork.yaml \
-              -out=/workspace/index.html
-
-      # Prepare pages directory
-      - run:
-          name: Build pages
-          command: |
-            mkdir -p /tmp/pages
-            mv index.html /tmp/pages/index.html
-            touch /tmp/pages/.nojekyll
-            if [ "$CIRCLE_PROJECT_REPONAME" == "op-geth" ] && [ "$CIRCLE_PROJECT_USERNAME" == "ethereum-optimism" ]; then
-              echo "op-geth.optimism.io" > /tmp/pages/CNAME
-            fi
-      - utils/github-pages-deploy:
-          src-pages-dir: /tmp/pages
   docker-release:
     environment:
       DOCKER_BUILDKIT: 1
@@ -104,7 +70,7 @@ jobs:
       repo:
         description: Docker repo
         type: string
-        default: "oplabs-tools-artifacts/images"
+        default: "boba-392114/bobanetwork-tools-artifacts/images"
       push_tags:
         description: Push release push tags
         type: boolean
@@ -141,7 +107,7 @@ jobs:
               -f Dockerfile .
       - when:
           condition:
-            equal: [true, <<parameters.push_tags>>]
+            equal: [ true, <<parameters.push_tags>> ]
           steps:
             - run:
                 name: Tag
@@ -169,6 +135,7 @@ jobs:
                       --image-path="$IMAGE_PATH"\
                       --signer-logging-level="INFO"\
                       --attestor-key-id="//cloudkms.googleapis.com/v1/projects/$ATTESTOR_PROJECT_NAME/locations/global/keyRings/$ATTESTOR_NAME-key-ring/cryptoKeys/$ATTESTOR_NAME-key/cryptoKeyVersions/1"
+
 
   build-geth:
     docker:
@@ -204,19 +171,20 @@ jobs:
       - checkout
       - run:
           command: go mod tidy && git diff --exit-code
-  check-sr-diff:
-    docker:
-      - image: cimg/go:<<pipeline.parameters.go_version>>
-    steps:
-      - checkout
-      - run:
-          name: install dasel
-          command: go install github.com/tomwright/dasel/v2/cmd/dasel@v2.8.1
-      - run:
-          name: generate artifact and check diff
-          command: |
-            bash ./sync-superchain.sh
-            git diff --exit-code
+  # check-sr-diff:
+  #   docker:
+  #     - image: cimg/go:<<pipeline.parameters.go_version>>
+  #   steps:
+  #     - checkout
+  #     - run:
+  #         name: install dasel
+  #         command: go install github.com/tomwright/dasel/v2/cmd/dasel@v2.8.1
+  #     - run:
+  #         name: generate artifact and check diff
+  #         command: |
+  #           bash ./sync-superchain.sh
+  #           git diff --exit-code
+
 
 workflows:
   main:
@@ -229,13 +197,13 @@ workflows:
           name: Run linter over geth
       - tidy-geth:
           name: Check geth go.mod file has been tidied
-      - docker-release:
-          name: Push to Docker
-          docker_tags: <<pipeline.git.revision>>
-          context:
-            - oplabs-gcr
-      - check-sr-diff:
-          name: Check superchain registry bundle diff
+      # - docker-release:
+      #     name: Push to Docker
+      #     docker_tags: <<pipeline.git.revision>>
+      #     context:
+      #       - oplabs-gcr
+      # - check-sr-diff:
+      #     name: Check superchain registry bundle diff
   release:
     jobs:
       - docker-release:
@@ -250,10 +218,10 @@ workflows:
           context:
             - oplabs-gcr-release
 
-  merge:
-    jobs:
-      - build-and-deploy:
-          context: circleci-repo-op-geth
-          filters:
-            branches:
-              only: optimism
+  # merge:
+  #   jobs:
+  #     - build-and-deploy:
+  #         context: circleci-repo-op-geth
+  #         filters:
+  #           branches:
+  #             only: optimism
