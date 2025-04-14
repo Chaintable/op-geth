@@ -39,6 +39,8 @@ const (
 	OPMainnetChainID   = 10
 	BaseMainnetChainID = 8453
 	baseSepoliaChainID = 84532
+	BobaMainnetChainID = 288
+	BobaSepoliaChainID = 28882
 )
 
 func newUint64(val uint64) *uint64 { return &val }

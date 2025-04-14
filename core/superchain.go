@@ -68,6 +68,10 @@ func LoadOPStackGenesis(chainID uint64) (*Genesis, error) {
 		switch chainID {
 		case params.OPMainnetChainID:
 			expectedHash = common.HexToHash("0x7ca38a1916c42007829c55e69d3e9a73265554b586a499015373241b8a3fa48b")
+		case params.BobaMainnetChainID:
+			expectedHash = common.HexToHash("0xdcd9e6a8f9973eaa62da2874959cb152faeb4fd6929177bd6335a1a16074ef9c")
+		case params.BobaSepoliaChainID:
+			expectedHash = common.HexToHash("0xc6171953a6a376ece6e33149686044f24f58a387ce2636a54e391d330b2326b5")
 		default:
 			return nil, fmt.Errorf("unknown stateless genesis definition for chain %d, genesis hash %s", chainID, genesisBlockHash)
 		}

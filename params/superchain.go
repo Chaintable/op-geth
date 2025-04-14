@@ -81,6 +81,22 @@ func LoadOPStackChainConfig(chConfig *superchain.ChainConfig) (*ChainConfig, err
 		out.GrayGlacierBlock = big.NewInt(105235063)
 		out.MergeNetsplitBlock = big.NewInt(105235063)
 		out.BedrockBlock = big.NewInt(105235063)
+	case BobaMainnetChainID:
+		out.BerlinBlock = big.NewInt(1149019)
+		out.LondonBlock = big.NewInt(1149019)
+		out.ArrowGlacierBlock = big.NewInt(1149019)
+		out.GrayGlacierBlock = big.NewInt(1149019)
+		out.MergeNetsplitBlock = big.NewInt(1149019)
+		out.BedrockBlock = big.NewInt(1149019)
+		out.RegolithTime = uint64ptr(1713302879) // Apr Apr 16 2024 21:27:59 UTC 2024
+	case BobaSepoliaChainID:
+		out.BerlinBlock = big.NewInt(511)
+		out.LondonBlock = big.NewInt(511)
+		out.ArrowGlacierBlock = big.NewInt(511)
+		out.GrayGlacierBlock = big.NewInt(511)
+		out.MergeNetsplitBlock = big.NewInt(511)
+		out.BedrockBlock = big.NewInt(511)
+		out.RegolithTime = uint64ptr(1705600788) // January 18, 2024 @ 5:59:48 pm UTC
 	}
 
 	return out, nil
