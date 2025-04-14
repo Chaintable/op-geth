@@ -113,7 +113,7 @@ func newCallTracerRaw() *callTracer {
 	return t
 }
 
-func (t *callTracer) ToTrace(f *callFrame) ptypes.Trace {
+func (t *callTracer) ToTrace(f *callFrame, traceAddress []int64) ptypes.Trace {
 	CallCreateType := ""
 	CallType := ""
 	switch f.Type {
@@ -151,6 +151,8 @@ func (t *callTracer) ToTrace(f *callFrame) ptypes.Trace {
 		PosInParentTrace:  int64(f.PosInParentTrace),
 		SelfStorageChange: f.SelfStorageChange,
 		StorageChange:     f.StorageChange,
+		Subtraces:         int64(len(f.Calls)),
+		TraceAddress:      traceAddress,
 	}
 }
 
@@ -253,8 +255,8 @@ func (t *callTracer) OnTxEnd(receipt *types.Receipt, err error) {
 	if len(t.callstack) == 1 && !t.callstack[0].failed() {
 		topCall := &t.callstack[0]
 		topCall.TraceID = util.ToHash([]string{t.txID, "", "0"})
-		BlockCtx.BlockFile.Traces = append(BlockCtx.BlockFile.Traces, t.ToTrace(topCall))
-		t.addTraceAndLog(topCall)
+		BlockCtx.BlockFile.Traces = append(BlockCtx.BlockFile.Traces, t.ToTrace(topCall, []int64{}))
+		t.addTraceAndLog(topCall, []int64{})
 	}
 }
 
@@ -280,6 +282,7 @@ func (t *callTracer) OnLog(log *types.Log) {
 		Topics:   remainingTopics,
 		Data:     log.Data,
 		Position: int64(len(t.callstack[len(t.callstack)-1].Calls) + len(t.callstack[len(t.callstack)-1].Logs)),
+		LogIndex: int64(log.Index),
 	}
 	t.callstack[len(t.callstack)-1].Logs = append(t.callstack[len(t.callstack)-1].Logs, l)
 }
@@ -323,11 +326,11 @@ func setStorageChange(cf *callFrame) {
 	}
 }
 
-func (t *callTracer) addTraceAndLog(cf *callFrame) {
+func (t *callTracer) addTraceAndLog(cf *callFrame, traceAddress []int64) {
 	for i := range cf.Calls {
 		cf.Calls[i].ParentTraceID = cf.TraceID
 		cf.Calls[i].TraceID = util.ToHash([]string{t.txID, cf.TraceID, fmt.Sprintf("%d", cf.Calls[i].PosInParentTrace)})
-		t.addTraceAndLog(&cf.Calls[i])
+		t.addTraceAndLog(&cf.Calls[i], childTraceAddress(traceAddress, int64(i)))
 	}
 	for i := range cf.Logs {
 		cf.Logs[i].ParentTraceID = cf.TraceID
@@ -335,6 +338,13 @@ func (t *callTracer) addTraceAndLog(cf *callFrame) {
 		BlockCtx.BlockFile.Events = append(BlockCtx.BlockFile.Events, cf.Logs[i])
 	}
 	for i := range cf.Calls {
-		BlockCtx.BlockFile.Traces = append(BlockCtx.BlockFile.Traces, t.ToTrace(&cf.Calls[i]))
+		BlockCtx.BlockFile.Traces = append(BlockCtx.BlockFile.Traces, t.ToTrace(&cf.Calls[i], childTraceAddress(traceAddress, int64(i))))
 	}
+}
+
+func childTraceAddress(a []int64, i int64) []int64 {
+	child := make([]int64, 0, len(a)+1)
+	child = append(child, a...)
+	child = append(child, i)
+	return child
 }

@@ -102,6 +102,14 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		}
 		receipt, err := applyTransaction(msg, p.config, gp, statedb, blockNumber, blockHash, tx, usedGas, vmenv)
 		if pipelineTracer != nil {
+			receipt.SetEffectiveGasPrice(tx, vmenv.Context.BaseFee)
+			if vmenv.Context.L1CostFunc != nil && !tx.IsDepositTx() && receipt.GasUsed > 0 {
+				l1Fee := vmenv.Context.L1CostFunc(tx.RollupCostData(), vmenv.Context.Time)
+				if l1Fee != nil && l1Fee.Cmp(common.Big0) > 0 {
+					gasUsed := new(big.Int).SetUint64(receipt.GasUsed)
+					receipt.EffectiveGasPrice = new(big.Int).Div(new(big.Int).Add(l1Fee, new(big.Int).Mul(receipt.EffectiveGasPrice, gasUsed)), gasUsed)
+				}
+			}
 			pipelineTracer.OnTxEnd(receipt, err)
 		}
 		if err != nil {

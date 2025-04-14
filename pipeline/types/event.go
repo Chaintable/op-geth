@@ -13,4 +13,5 @@ type Event struct {
 	Data          hexutil.Bytes `json:"data"`
 	ParentTraceID string        `json:"parent_trace_id"`
 	Position      int64         `json:"pos_in_parent_trace"`
+	LogIndex      int64         `json:"idx"`
 }

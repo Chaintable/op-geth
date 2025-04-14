@@ -602,3 +602,7 @@ func u32ptrTou64ptr(a *uint32) *uint64 {
 	b := uint64(*a)
 	return &b
 }
+
+func (r *Receipt) SetEffectiveGasPrice(tx *Transaction, baseFee *big.Int) {
+	r.EffectiveGasPrice = tx.inner.effectiveGasPrice(new(big.Int), baseFee)
+}
