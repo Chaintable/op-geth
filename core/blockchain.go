@@ -1520,7 +1520,7 @@ func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types
 		// 先确保 pipeline tracer 不为空，然后再判断是否需要push kafka
 		// 上一个push kafka的block, 必然存在(至少有genesis block)
 		// 上一个push kafka的block比当前的head block还要新，说明有unwind回退，不需要处理, 即使是fork，等有更新的block的时候再一起push
-		if tracer.NodeXPusher != nil && tracer.NodeXPusher.LastPushedBlock().BlockNumber <= block.NumberU64() {
+		if tracer.NodeXPusher != nil && !tracer.NodeXPusher.IsBackup && tracer.NodeXPusher.LastPushedBlock().BlockNumber <= block.NumberU64() {
 			lastPushBlock := tracer.NodeXPusher.LastPushedBlock()
 			_, dropBlocks, newBlocks := bc.getCommonAncestor(*lastPushBlock, ptypes.BlockContext{
 				BlockNumber: block.NumberU64(),
@@ -2397,7 +2397,7 @@ func (bc *BlockChain) SetCanonical(head *types.Block) (common.Hash, error) {
 	// 先确保 pipeline tracer 不为空，然后再判断是否需要push kafka
 	// 上一个push kafka的block, 必然存在(至少有genesis block)
 	// 上一个push kafka的block比当前的head block还要新，说明有unwind回退，不需要处理, 即使是fork，等有更新的block的时候再一起push
-	if tracer.NodeXPusher != nil && tracer.NodeXPusher.LastPushedBlock().BlockNumber <= head.NumberU64() {
+	if tracer.NodeXPusher != nil && !tracer.NodeXPusher.IsBackup && tracer.NodeXPusher.LastPushedBlock().BlockNumber <= head.NumberU64() {
 		lastPushBlock := tracer.NodeXPusher.LastPushedBlock()
 		_, dropBlocks, newBlocks := bc.getCommonAncestor(*lastPushBlock, ptypes.BlockContext{
 			BlockNumber: head.NumberU64(),

@@ -315,7 +315,11 @@ func (t *PipelineTracer) OnCommit(originRoot common.Hash, root common.Hash, dest
 	// 等待所有上传完成
 	wg.Wait()
 
-	log.Info("Upload block", "block number", BlockCtx.BlockNumber, "block hash", BlockCtx.BlockHash.Hex())
+	if t.config.IsBackup {
+		log.Info("Backup Upload block", "block number", BlockCtx.BlockNumber, "block hash", BlockCtx.BlockHash.Hex())
+	} else {
+		log.Info("Upload block", "block number", BlockCtx.BlockNumber, "block hash", BlockCtx.BlockHash.Hex())
+	}
 
 	// 检查是否有错误
 	if len(uploadErrs) > 0 {

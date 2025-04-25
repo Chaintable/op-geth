@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -37,7 +36,6 @@ func UploadFileToS3(uploader *s3.Client, bucket string, key string, data []byte,
 	if err != nil {
 		var apiErr smithy.APIError
 		if errors.As(err, &apiErr) && apiErr.ErrorCode() == "PreconditionFailed" {
-			log.Printf("File %s already exists in bucket %s, skipping upload\n", key, bucket)
 			return nil
 		}
 	}
