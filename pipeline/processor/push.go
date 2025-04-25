@@ -236,7 +236,6 @@ func (p *PushProcessor) LastPushedBlock() *types.BlockContext {
 func (p *PushProcessor) PushBlockChangeNotification(blockNotice *types.BlockChangeNotification) error {
 	if p.IsBackup {
 		// 如果是备份模式，直接返回
-		log.Printf("backup mode, skip push block change notification\n")
 		return nil
 	}
 	if len(blockNotice.NewBlocks) > 1 {
