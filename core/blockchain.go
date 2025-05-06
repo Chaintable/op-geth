@@ -2587,19 +2587,19 @@ func (bc *BlockChain) GetTrieFlushInterval() time.Duration {
 }
 
 func (bc *BlockChain) GetHeaderByHash2(blockHash common.Hash) *types.Header {
-	// header := bc.GetHeaderByHash(blockHash)
-	// if header == nil {
-	header := &types.Header{}
-	if tracer.NodeXPusher != nil {
-		err := util.DownloadFileFromS3Json(tracer.NodeXPusher.Uploader, tracer.NodeXPusher.Bucket, fmt.Sprintf("%s/%s/block", tracer.BizChainID, blockHash.String()), header)
-		if err != nil {
-			log.Error("GetHeaderByHash2 DownloadFileFromS3Json error", "err", err)
-			return nil
-		} else {
-			return header
+	header := bc.GetHeaderByHash(blockHash)
+	if header == nil {
+		if tracer.NodeXPusher != nil {
+			header := &types.Header{}
+			err := util.DownloadFileFromS3Json(tracer.NodeXPusher.Uploader, tracer.NodeXPusher.Bucket, fmt.Sprintf("%s/%s/block", tracer.BizChainID, blockHash.String()), header)
+			if err != nil {
+				log.Error("GetHeaderByHash2 DownloadFileFromS3Json error", "err", err)
+				return nil
+			} else {
+				return header
+			}
 		}
 	}
-	// }
 	return header
 }
 
