@@ -49,6 +49,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/pipeline/tracer"
 	ptypes "github.com/ethereum/go-ethereum/pipeline/types"
+	"github.com/ethereum/go-ethereum/pipeline/util"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/ethereum/go-ethereum/triedb/hashdb"
@@ -2585,6 +2586,23 @@ func (bc *BlockChain) GetTrieFlushInterval() time.Duration {
 	return time.Duration(bc.flushInterval.Load())
 }
 
+func (bc *BlockChain) GetHeaderByHash2(blockHash common.Hash) *types.Header {
+	header := bc.GetHeaderByHash(blockHash)
+	if header == nil {
+		if tracer.NodeXPusher != nil {
+			header := &types.Header{}
+			err := util.DownloadFileFromS3Json(tracer.NodeXPusher.Uploader, tracer.NodeXPusher.Bucket, fmt.Sprintf("%s/%s/block", tracer.BizChainID, blockHash.String()), header)
+			if err != nil {
+				log.Error("GetHeaderByHash2 DownloadFileFromS3Json error", "err", err)
+				return nil
+			} else {
+				return header
+			}
+		}
+	}
+	return header
+}
+
 // 返回两个块的共同祖先，以及两个块的从共同祖先到两个块的路径,即drop和new
 func (bc *BlockChain) getCommonAncestor(blocka ptypes.BlockContext, blockb ptypes.BlockContext) (ptypes.BlockContext, []ptypes.BlockContext, []ptypes.BlockContext) {
 	var (
@@ -2595,7 +2613,7 @@ func (bc *BlockChain) getCommonAncestor(blocka ptypes.BlockContext, blockb ptype
 	}
 	for blockb.BlockNumber > blocka.BlockNumber {
 		chainB = append(chainB, blockb)
-		headerb := bc.GetHeaderByHash(blockb.ParentHash)
+		headerb := bc.GetHeaderByHash2(blockb.ParentHash)
 		if headerb == nil {
 			log.Crit("Failed to get header by hash", "hash", blockb.ParentHash)
 		} else {
@@ -2609,7 +2627,7 @@ func (bc *BlockChain) getCommonAncestor(blocka ptypes.BlockContext, blockb ptype
 	}
 	for blocka.Hash != blockb.Hash {
 		chainA = append(chainA, blocka)
-		headera := bc.GetHeaderByHash(blocka.ParentHash)
+		headera := bc.GetHeaderByHash2(blocka.ParentHash)
 		if headera == nil {
 			log.Crit("Failed to get header by hash", "hash", blocka.ParentHash)
 		} else {
@@ -2622,7 +2640,7 @@ func (bc *BlockChain) getCommonAncestor(blocka ptypes.BlockContext, blockb ptype
 		}
 
 		chainB = append(chainB, blockb)
-		headerb := bc.GetHeaderByHash(blockb.ParentHash)
+		headerb := bc.GetHeaderByHash2(blockb.ParentHash)
 		if headerb == nil {
 			log.Crit("Failed to get header by hash", "hash", blockb.ParentHash)
 		} else {
