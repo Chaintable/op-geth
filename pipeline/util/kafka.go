@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"log"
 
 	"github.com/ethereum/go-ethereum/pipeline/types"
 	"github.com/segmentio/kafka-go"
@@ -69,7 +68,6 @@ func WriteBlockNotice(writer *kafka.Writer, blockNotice *types.BlockChangeNotifi
 	if err != nil {
 		return err
 	}
-	log.Printf("write block notice size %dm \n", len(value)/1024/1024)
 	err = writer.WriteMessages(context.Background(), kafka.Message{
 		Key:   []byte("NewBlock"),
 		Value: value,
