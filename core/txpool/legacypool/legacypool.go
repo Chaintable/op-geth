@@ -18,6 +18,7 @@
 package legacypool
 
 import (
+	"context"
 	"errors"
 	"math"
 	"math/big"
@@ -260,7 +261,11 @@ type LegacyPool struct {
 
 	changesSinceReorg int // A counter for how many drops we've performed in-between reorg.
 
-	l1CostFn txpool.L1CostFunc // To apply L1 costs as rollup, optional field, may be nil.
+	rollupCostFn txpool.RollupCostFunc // Additional rollup cost function, optional field, may be nil.
+
+	ingressFilters []txpool.IngressFilter // Filters to apply to incoming transactions
+	filterCtx      context.Context        // Filters may use this context with external resources
+	filterCancel   context.CancelFunc     // Cancel function for the filter context
 }
 
 type txpoolResetRequest struct {
@@ -330,6 +335,9 @@ func (pool *LegacyPool) Init(gasTip uint64, head *types.Header, reserve txpool.A
 	pool.currentState = statedb
 	pool.pendingNonces = newNoncer(statedb)
 
+	// OP-Stack addition
+	pool.resetRollupCostFn(head.Time, statedb)
+
 	pool.wg.Add(1)
 	go pool.scheduleReorgLoop()
 
@@ -394,6 +402,10 @@ func (pool *LegacyPool) loop() {
 
 // Close terminates the transaction pool.
 func (pool *LegacyPool) Close() error {
+	// Cancel the filter context if it exists
+	if pool.filterCancel != nil {
+		pool.filterCancel()
+	}
 	// Terminate the pool reorger and return
 	close(pool.reorgShutdownCh)
 	pool.wg.Wait()
@@ -474,6 +486,13 @@ func (pool *LegacyPool) stats() (int, int) {
 	return pending, queued
 }
 
+func (pool *LegacyPool) SetIngressFilters(filters []txpool.IngressFilter) {
+	pool.mu.Lock()
+	defer pool.mu.Unlock()
+	pool.filterCtx, pool.filterCancel = context.WithCancel(context.Background())
+	pool.ingressFilters = filters
+}
+
 // Content retrieves the data content of the transaction pool, returning all the
 // pending as well as queued transactions, grouped by account and sorted by nonce.
 func (pool *LegacyPool) Content() (map[common.Address][]*types.Transaction, map[common.Address][]*types.Transaction) {
@@ -523,6 +542,10 @@ func (pool *LegacyPool) ToJournal() map[common.Address]types.Transactions {
 		txs[addr] = append(txs[addr], queued.Flatten()...)
 	}
 	return txs
+}
+
+func (pool *LegacyPool) RollupCostFunc() txpool.RollupCostFunc {
+	return pool.rollupCostFn
 }
 
 // Pending retrieves all currently processable transactions, grouped by origin
@@ -637,18 +660,15 @@ func (pool *LegacyPool) validateTx(tx *types.Transaction) error {
 		ExistingCost: func(addr common.Address, nonce uint64) *big.Int {
 			if list := pool.pending[addr]; list != nil {
 				if tx := list.txs.Get(nonce); tx != nil {
-					cost := tx.Cost()
-					if pool.l1CostFn != nil {
-						if l1Cost := pool.l1CostFn(tx.RollupCostData()); l1Cost != nil { // add rollup cost
-							cost = cost.Add(cost, l1Cost)
-						}
-					}
-					return cost
+					// The total cost is guaranteed to not overflow because it got already
+					// successfully added to the list.
+					cost, _ := txpool.TotalTxCost(tx, pool.rollupCostFn)
+					return cost.ToBig()
 				}
 			}
 			return nil
 		},
-		L1CostFn: pool.l1CostFn,
+		RollupCostFn: pool.rollupCostFn,
 	}
 	if err := txpool.ValidateTransactionWithState(tx, pool.signer, opts); err != nil {
 		return err
@@ -802,7 +822,7 @@ func (pool *LegacyPool) add(tx *types.Transaction) (replaced bool, err error) {
 	// Try to replace an existing transaction in the pending pool
 	if list := pool.pending[from]; list != nil && list.Contains(tx.Nonce()) {
 		// Nonce already pending, check if required price bump is met
-		inserted, old := list.Add(tx, pool.config.PriceBump, pool.l1CostFn)
+		inserted, old := list.Add(tx, pool.config.PriceBump)
 		if !inserted {
 			pendingDiscardMeter.Mark(1)
 			return false, txpool.ErrReplaceUnderpriced
@@ -863,9 +883,9 @@ func (pool *LegacyPool) enqueueTx(hash common.Hash, tx *types.Transaction, addAl
 	// Try to insert the transaction into the future queue
 	from, _ := types.Sender(pool.signer, tx) // already validated
 	if pool.queue[from] == nil {
-		pool.queue[from] = newList(false)
+		pool.queue[from] = newRollupList(false, pool)
 	}
-	inserted, old := pool.queue[from].Add(tx, pool.config.PriceBump, pool.l1CostFn)
+	inserted, old := pool.queue[from].Add(tx, pool.config.PriceBump)
 	if !inserted {
 		// An older transaction was better, discard this
 		queuedDiscardMeter.Mark(1)
@@ -903,11 +923,11 @@ func (pool *LegacyPool) enqueueTx(hash common.Hash, tx *types.Transaction, addAl
 func (pool *LegacyPool) promoteTx(addr common.Address, hash common.Hash, tx *types.Transaction) bool {
 	// Try to insert the transaction into the pending queue
 	if pool.pending[addr] == nil {
-		pool.pending[addr] = newList(true)
+		pool.pending[addr] = newRollupList(true, pool)
 	}
 	list := pool.pending[addr]
 
-	inserted, old := list.Add(tx, pool.config.PriceBump, pool.l1CostFn)
+	inserted, old := list.Add(tx, pool.config.PriceBump)
 	if !inserted {
 		// An older transaction was better, discard this
 		pool.all.Remove(hash)
@@ -981,6 +1001,20 @@ func (pool *LegacyPool) Add(txs []*types.Transaction, sync bool) []error {
 			errs[i] = err
 			log.Trace("Discarding invalid transaction", "hash", tx.Hash(), "err", err)
 			invalidTxMeter.Mark(1)
+			continue
+		}
+		// Exclude transactions which fail the ingress filters
+		filtered := false
+		for _, filter := range pool.ingressFilters {
+			if !filter.FilterTx(pool.filterCtx, tx) {
+				errs[i] = core.ErrTxFilteredOut
+				log.Trace("Discarding filtered transaction", "hash", tx.Hash())
+				invalidTxMeter.Mark(1)
+				filtered = true
+				break
+			}
+		}
+		if filtered {
 			continue
 		}
 		// Accumulate all unknown transactions for deeper processing
@@ -1418,11 +1452,8 @@ func (pool *LegacyPool) reset(oldHead, newHead *types.Header) {
 	pool.currentState = statedb
 	pool.pendingNonces = newNoncer(statedb)
 
-	if costFn := types.NewL1CostFunc(pool.chainconfig, statedb); costFn != nil {
-		pool.l1CostFn = func(rollupCostData types.RollupCostData) *big.Int {
-			return costFn(rollupCostData, newHead.Time)
-		}
-	}
+	// OP-Stack addition
+	pool.resetRollupCostFn(newHead.Time, statedb)
 
 	// Inject any transactions discarded due to reorgs
 	log.Debug("Reinjecting stale transactions", "count", len(reinject))
@@ -1430,22 +1461,12 @@ func (pool *LegacyPool) reset(oldHead, newHead *types.Header) {
 	pool.addTxsLocked(reinject)
 }
 
-// reduceBalanceByL1Cost returns the given balance, reduced by the L1Cost of the first transaction in list if applicable
-// Other txs will get filtered out necessary.
-func (pool *LegacyPool) reduceBalanceByL1Cost(list *list, balance *uint256.Int) *uint256.Int {
-	if !list.Empty() && pool.l1CostFn != nil {
-		el := list.txs.FirstElement()
-		if l1Cost := pool.l1CostFn(el.RollupCostData()); l1Cost != nil {
-			l1Cost256 := uint256.MustFromBig(l1Cost)
-			if l1Cost256.Cmp(balance) >= 0 {
-				// Avoid underflow
-				balance = uint256.NewInt(0)
-			} else {
-				balance = new(uint256.Int).Sub(balance, l1Cost256)
-			}
+func (pool *LegacyPool) resetRollupCostFn(ts uint64, statedb *state.StateDB) {
+	if costFn := types.NewTotalRollupCostFunc(pool.chainconfig, statedb); costFn != nil {
+		pool.rollupCostFn = func(tx types.RollupTransaction) *uint256.Int {
+			return costFn(tx, ts)
 		}
 	}
-	return balance
 }
 
 // promoteExecutables moves transactions that have become processable from the
@@ -1469,7 +1490,6 @@ func (pool *LegacyPool) promoteExecutables(accounts []common.Address) []*types.T
 		}
 		log.Trace("Removed old queued transactions", "count", len(forwards))
 		balance := pool.currentState.GetBalance(addr)
-		balance = pool.reduceBalanceByL1Cost(list, balance)
 		// Drop all transactions that are too costly (low balance or out of gas)
 		drops, _ := list.Filter(balance, gasLimit)
 		for _, tx := range drops {
@@ -1659,7 +1679,6 @@ func (pool *LegacyPool) demoteUnexecutables() {
 			log.Trace("Removed old pending transaction", "hash", hash)
 		}
 		balance := pool.currentState.GetBalance(addr)
-		balance = pool.reduceBalanceByL1Cost(list, balance)
 		// Drop all transactions that are too costly (low balance or out of gas), and queue any invalids back for later
 		drops, invalids := list.Filter(balance, gasLimit)
 		for _, tx := range drops {
