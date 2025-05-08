@@ -5,7 +5,7 @@ go 1.22.5
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.2.0
 	github.com/BurntSushi/toml v1.4.0
-	github.com/Chaintable/pipeline v0.0.45
+	github.com/Chaintable/pipeline v0.0.46
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/VictoriaMetrics/fastcache v1.12.2
 	github.com/aws/aws-sdk-go-v2 v1.32.5
