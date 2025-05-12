@@ -113,11 +113,11 @@ func GenesisAllocToStateDiff(genesisAlloc types.GenesisAlloc) *ptypes.BlockStora
 			Address:  crypto.Keccak256Hash(addr[:]),
 			Balance:  uint256.MustFromBig(acc.Balance),
 			Nonce:    acc.Nonce,
-			CodeHash: common.BytesToHash(acc.Code),
+			CodeHash: crypto.Keccak256Hash(acc.Code),
 		})
 		if len(acc.Code) > 0 {
 			diff.NewCodes = append(diff.NewCodes, ptypes.NewCode{
-				CodeHash: common.BytesToHash(acc.Code),
+				CodeHash: crypto.Keccak256Hash(acc.Code),
 				Code:     acc.Code,
 			})
 		}
