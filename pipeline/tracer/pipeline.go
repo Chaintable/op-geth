@@ -128,8 +128,9 @@ func GenesisAllocToStateDiff(genesisAlloc types.GenesisAlloc) *ptypes.BlockStora
 			if len(v) > 0 {
 				value = uint256.NewInt(0).SetBytes(v.Bytes())
 			}
+			khash := crypto.Keccak256Hash(index[:])
 			values = append(values, ptypes.IndexValuePair{
-				Index: index,
+				Index: khash,
 				Value: value,
 			})
 		}
