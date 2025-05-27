@@ -1,15 +1,35 @@
 package tracing
 
 import (
-	"encoding/json"
+	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/ethereum/go-ethereum/pipeline/tracer"
+	"github.com/holiman/uint256"
 )
 
-var GlobalHooks *Hooks
+// StateDB gives tracers access to the whole state.
+type StateDB interface {
+	GetBalance(common.Address) *uint256.Int
+	GetNonce(common.Address) uint64
+	GetCode(common.Address) []byte
+	GetCodeHash(common.Address) common.Hash
+	GetState(common.Address, common.Hash) common.Hash
+	GetTransientState(common.Address, common.Hash) common.Hash
+	Exist(common.Address) bool
+	GetRefund() uint64
+}
+
+// VMContext provides the context for the EVM execution.
+type VMContext struct {
+	Coinbase    common.Address
+	BlockNumber *big.Int
+	Time        uint64
+	Random      *common.Hash
+	BaseFee     *big.Int
+	StateDB     StateDB
+}
 
 type (
 	/*
@@ -19,7 +39,7 @@ type (
 	// TxStartHook is called before the execution of a transaction starts.
 	// Call simulations don't come with a valid signature. `from` field
 	// to be used for address of the caller.
-	TxStartHook = func(tx *types.Transaction, from common.Address)
+	TxStartHook = func(vmContext *VMContext, tx *types.Transaction, from common.Address)
 
 	// TxEndHook is called after the execution of a transaction ends.
 	TxEndHook = func(receipt *types.Receipt, err error)
@@ -44,6 +64,8 @@ type (
 
 	// LogHook is called when a log is emitted.
 	LogHook = func(log *types.Log)
+
+	OnSystemCallStartHookV2 = func(vm *VMContext)
 )
 
 type Hooks struct {
@@ -51,50 +73,13 @@ type Hooks struct {
 	OnTxStart TxStartHook
 	OnTxEnd   TxEndHook
 	// Chain events
-	OnBlockchainInit BlockchainInitHook
-	OnClose          CloseHook
-	OnBlockStart     BlockStartHook
-	OnBlockEnd       BlockEndHook
-	OnGenesisBlock   GenesisBlockHook
-	OnLog            LogHook
+	OnBlockchainInit        BlockchainInitHook
+	OnClose                 CloseHook
+	OnBlockStart            BlockStartHook
+	OnSystemCallStartHookV2 OnSystemCallStartHookV2
+	OnBlockEnd              BlockEndHook
+	OnGenesisBlock          GenesisBlockHook
+	OnLog                   LogHook
 	// custom hook
 	OnCommit CommitHook
-	Tracer   *tracer.PipelineTracer
-}
-
-func BuildHooks(t *tracer.PipelineTracer) *Hooks {
-	return &Hooks{
-		OnBlockchainInit: t.OnBlockchainInit,
-		OnClose:          t.OnClose,
-		OnBlockStart:     t.OnBlockStart,
-		OnTxStart:        t.OnTxStart,
-		OnTxEnd:          t.OnTxEnd,
-		OnLog:            t.OnLog,
-		OnGenesisBlock:   t.OnGenesisBlock,
-		OnCommit:         t.OnCommit,
-	}
-}
-
-func InitHooks(cfg json.RawMessage) (*Hooks, error) {
-	t, err := tracer.NewPipelineTracer(cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	GlobalHooks = &Hooks{
-		OnBlockchainInit: t.OnBlockchainInit,
-		OnClose:          t.OnClose,
-		OnBlockStart:     t.OnBlockStart,
-		OnTxStart:        t.OnTxStart,
-		OnTxEnd:          t.OnTxEnd,
-		OnLog:            t.OnLog,
-		OnGenesisBlock:   t.OnGenesisBlock,
-		OnCommit:         t.OnCommit,
-		Tracer:           t,
-	}
-	return GlobalHooks, nil
-}
-
-func GetHooks() *Hooks {
-	return GlobalHooks
 }

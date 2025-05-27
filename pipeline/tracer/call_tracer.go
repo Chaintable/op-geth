@@ -27,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	ptypes "github.com/ethereum/go-ethereum/pipeline/types"
@@ -240,7 +241,7 @@ func (*callTracer) CaptureTxStart(gasLimit uint64) {
 func (*callTracer) CaptureTxEnd(restGas uint64) {
 }
 
-func (t *callTracer) OnTxStart(tx *types.Transaction, from common.Address) {
+func (t *callTracer) OnTxStart(vmContext *tracing.VMContext, tx *types.Transaction, from common.Address) {
 	t.gasLimit = tx.Gas()
 	t.txID = tx.Hash().Hex()
 }

@@ -441,7 +441,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 		if _, ok := vmConfig.Tracer.(*tracer.PipelineTracer); !ok {
 			log.Crit("vmConfig.Tracer must be a pipeline.Tracer")
 		} else {
-			bc.hooks = tracing.BuildHooks(vmConfig.Tracer.(*tracer.PipelineTracer))
+			bc.hooks = tracer.BuildHooks(vmConfig.Tracer.(*tracer.PipelineTracer))
 		}
 	}
 
@@ -1829,7 +1829,9 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool) (int, error)
 				throwaway, _ := state.New(parent.Root, bc.stateCache, bc.snaps)
 
 				go func(start time.Time, followup *types.Block, throwaway *state.StateDB) {
-					bc.prefetcher.Prefetch(followup, throwaway, bc.vmConfig, &followupInterrupt)
+					vmConfig := bc.vmConfig
+					vmConfig.Tracer = nil
+					bc.prefetcher.Prefetch(followup, throwaway, vmConfig, &followupInterrupt)
 
 					blockPrefetchExecuteTimer.Update(time.Since(start))
 					if followupInterrupt.Load() {
