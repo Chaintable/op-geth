@@ -284,7 +284,6 @@ func (t *prestateTracer) Stop(err error) {
 // lookupAccount fetches details of an account and adds it to the prestate
 // if it doesn't exist there.
 func (t *prestateTracer) lookupAccount(addr common.Address) {
-	log.Info("prestateTracer.lookupAccount", "address", addr.Hex(), "config", t.config)
 	if _, ok := t.pre[addr]; ok {
 		return
 	}
