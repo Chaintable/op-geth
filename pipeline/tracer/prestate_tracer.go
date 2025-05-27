@@ -93,8 +93,6 @@ func (t *prestateTracer) processDiffState() {
 		newBalance := t.env.StateDB.GetBalance(addr).ToBig()
 		newNonce := t.env.StateDB.GetNonce(addr)
 
-		log.Info("prestateTracer.processDiffState", "address", addr.Hex(), "preBalance", t.pre[addr].Balance, "balance", newBalance, "preNonce", t.pre[addr].Nonce, "nonce", newNonce)
-
 		if newBalance.Cmp(t.pre[addr].Balance) != 0 {
 			modified = true
 			postAccount.Balance = newBalance
