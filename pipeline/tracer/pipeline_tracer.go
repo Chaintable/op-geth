@@ -267,7 +267,12 @@ func (t *PipelineTracer) OnCommit(originRoot common.Hash, root common.Hash, dest
 		if !t.config.EnableStateDiff {
 			BlockCtx.BlockDiff = stateUpdateToStateDiff(originRoot, root, destructs, accounts, accountsOrigin, storages, storagesOrigin, codes)
 		} else {
-			BlockCtx.BlockDiff = t.prestateTracer.GetStateDiff(originRoot, root)
+			stateDiffA := stateUpdateToStateDiff(originRoot, root, destructs, accounts, accountsOrigin, storages, storagesOrigin, codes)
+			stateDiffB := t.prestateTracer.GetStateDiff(originRoot, root)
+			if !stateDiffA.Equal(stateDiffB) {
+				log.Crit("State diff mismatch", "originRoot", originRoot.Hex(), "root", root.Hex(), "stateDiffA", stateDiffA, "stateDiffB", stateDiffB)
+			}
+			BlockCtx.BlockDiff = stateDiffB
 		}
 	} else {
 		BlockCtx.BlockDiff = nil

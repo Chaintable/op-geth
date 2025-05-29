@@ -213,23 +213,33 @@ func (t *prestateTracer) GetStateDiff(originRoot common.Hash, root common.Hash) 
 	stateDiff.Hash = root
 	stateDiff.ParentHash = originRoot
 
-	for addr, account := range t.post {
+	for addr, newAccount := range t.post {
+		oldAccount, exists := t.pre[addr]
+		if !exists {
+			// If the account does not exist in prestate, it is a new create account
+			oldAccount = &account{
+				Balance: big.NewInt(0),
+				Nonce:   0,
+				empty:   true,
+			}
+		}
+
 		// only storage changes
-		if account.Nonce == 0 && len(account.Code) == 0 && account.Balance == nil {
+		if newAccount.Nonce == 0 && len(newAccount.Code) == 0 && newAccount.Balance == nil {
 			continue
 		}
-		if account.Balance != nil || account.Nonce != 0 || len(account.Code) > 0 {
-			newBalance := t.pre[addr].Balance
-			if account.Balance != nil {
-				newBalance = account.Balance
+		if newAccount.Balance != nil || newAccount.Nonce != 0 || len(newAccount.Code) > 0 {
+			newBalance := oldAccount.Balance
+			if newAccount.Balance != nil {
+				newBalance = newAccount.Balance
 			}
-			newNonce := t.pre[addr].Nonce
-			if account.Nonce != 0 {
-				newNonce = account.Nonce
+			newNonce := oldAccount.Nonce
+			if newAccount.Nonce != 0 {
+				newNonce = newAccount.Nonce
 			}
-			newCodeHash := crypto.Keccak256Hash(t.pre[addr].Code)
-			if len(account.Code) > 0 {
-				newCodeHash = crypto.Keccak256Hash(account.Code)
+			newCodeHash := crypto.Keccak256Hash(oldAccount.Code)
+			if len(newAccount.Code) > 0 {
+				newCodeHash = crypto.Keccak256Hash(newAccount.Code)
 			}
 
 			stateDiff.NewAccounts = append(stateDiff.NewAccounts, ptypes.NewAccount{
