@@ -17,15 +17,16 @@ import (
 )
 
 type ExtraInfo struct {
-	BlockNumber uint64
-	BlockHash   common.Hash
-	BlockFile   *ptypes.BlockFile
-	Tx          *types.Transaction
-	From        common.Address
-	BlockHeader *ptypes.Header
-	BlockDiff   *ptypes.BlockStorageDiff
-	BlockChange *ptypes.BlockChangeNotification
-	Committed   bool
+	BlockNumber     uint64
+	BlockHash       common.Hash
+	BlockFile       *ptypes.BlockFile
+	Tx              *types.Transaction
+	From            common.Address
+	BlockHeader     *ptypes.Header
+	BlockDiff       *ptypes.BlockStorageDiff
+	BlockChange     *ptypes.BlockChangeNotification
+	Committed       bool
+	ChangeContracts map[common.Address]struct{}
 	// metrics timer
 	TxStartTime    time.Time
 	BlockStartTime time.Time

@@ -25,4 +25,5 @@ type Trace struct {
 	StorageChange     bool          `json:"storage_change"`
 	Subtraces         int64         `json:"subtraces"`
 	TraceAddress      []int64       `json:"trace_address"`
+	Error             string        `json:"error,omitempty"`
 }

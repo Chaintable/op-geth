@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"strings"
 	"sync"
 	"time"
 
@@ -90,6 +91,7 @@ func (t *PipelineTracer) OnBlockStart(block *types.Block) {
 	BlockCtx.From = common.Address{}
 	BlockCtx.BlockStartTime = time.Now()
 	BlockCtx.Committed = false
+	BlockCtx.ChangeContracts = make(map[common.Address]struct{})
 	if t.config.EnableStateDiff {
 		t.prestateTracer = newPrestateTracer(&prestateTracerConfig{
 			DiffMode: true,
@@ -267,15 +269,14 @@ func (t *PipelineTracer) OnCommit(originRoot common.Hash, root common.Hash, dest
 		if !t.config.EnableStateDiff {
 			BlockCtx.BlockDiff = stateUpdateToStateDiff(originRoot, root, destructs, accounts, accountsOrigin, storages, storagesOrigin, codes)
 		} else {
-			stateDiffA := stateUpdateToStateDiff(originRoot, root, destructs, accounts, accountsOrigin, storages, storagesOrigin, codes)
-			stateDiffB := t.prestateTracer.GetStateDiff(originRoot, root)
-			if !stateDiffA.Equal(stateDiffB) {
-				log.Crit("State diff mismatch", "originRoot", originRoot.Hex(), "root", root.Hex(), "stateDiffA", stateDiffA, "stateDiffB", stateDiffB)
-			}
-			BlockCtx.BlockDiff = stateDiffB
+			BlockCtx.BlockDiff = t.prestateTracer.GetStateDiff(originRoot, root)
 		}
 	} else {
 		BlockCtx.BlockDiff = nil
+	}
+
+	for addr := range BlockCtx.ChangeContracts {
+		BlockCtx.BlockFile.StorageContracts = append(BlockCtx.BlockFile.StorageContracts, strings.ToLower(addr.Hex()))
 	}
 
 	var wg sync.WaitGroup
