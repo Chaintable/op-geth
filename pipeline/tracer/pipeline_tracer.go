@@ -362,10 +362,6 @@ func (t *PipelineTracer) OnCommit(originRoot common.Hash, root common.Hash, dest
 	BlockCtx.Committed = true
 
 	metrics.LatestUploadedBlockNumber.Update(int64(BlockCtx.BlockNumber))
-
-	if len(BlockCtx.BlockFile.ErrorEvents) > 0 && len(BlockCtx.BlockFile.ErrorTraces) > 0 {
-		log.Crit("Block file contains error events and traces", "block number", BlockCtx.BlockNumber, "block hash", BlockCtx.BlockHash.Hex())
-	}
 }
 
 func BuildHooks(t *PipelineTracer) *tracing.Hooks {
