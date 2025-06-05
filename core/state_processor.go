@@ -80,9 +80,6 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		vmenv   = vm.NewEVM(context, vm.TxContext{}, statedb, p.config, cfg)
 		signer  = types.MakeSigner(p.config, header.Number, header.Time)
 	)
-	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
-		ProcessBeaconBlockRoot(*beaconRoot, vmenv, statedb)
-	}
 	// Iterate over and process the individual transactions
 	var pipelineTracer *tracer.PipelineTracer
 	if p, ok := cfg.Tracer.(*tracer.PipelineTracer); !ok {
@@ -90,7 +87,14 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	} else {
 		pipelineTracer = p
 	}
-	statedb.SetHooks(tracing.BuildHooks(pipelineTracer))
+	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
+		pipelineTracer.OnSystemCallStartHookV2(&tracing.VMContext{
+			Coinbase: header.Coinbase,
+			StateDB:  statedb,
+		})
+		ProcessBeaconBlockRoot(*beaconRoot, vmenv, statedb)
+	}
+	statedb.SetHooks(tracer.BuildHooks(pipelineTracer))
 	for i, tx := range block.Transactions() {
 		msg, err := TransactionToMessage(tx, signer, header.BaseFee)
 		if err != nil {
@@ -98,7 +102,11 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		}
 		statedb.SetTxContext(tx.Hash(), i)
 		if pipelineTracer != nil {
-			pipelineTracer.OnTxStart(tx, msg.From)
+			pipelineTracer.OnTxStart(&tracing.VMContext{
+				Coinbase: header.Coinbase,
+				StateDB:  statedb,
+			},
+				tx, msg.From)
 		}
 		receipt, err := applyTransaction(msg, p.config, gp, statedb, blockNumber, blockHash, tx, usedGas, vmenv)
 		if pipelineTracer != nil {

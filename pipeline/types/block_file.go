@@ -9,10 +9,13 @@ import (
 )
 
 type BlockFile struct {
-	Block  Block         `json:"block"`
-	Txs    []Transaction `json:"txs"`
-	Events []Event       `json:"events"`
-	Traces []Trace       `json:"traces"`
+	Block            Block         `json:"block"`
+	Txs              []Transaction `json:"txs"`
+	Events           []Event       `json:"events"`
+	Traces           []Trace       `json:"traces"`
+	ErrorEvents      []Event       `json:"error_events"`
+	ErrorTraces      []Trace       `json:"error_traces"`
+	StorageContracts []string      `json:"storage_contracts"`
 }
 
 func (bf *BlockFile) Validation() BlockValidation {

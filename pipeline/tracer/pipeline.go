@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
@@ -16,15 +17,16 @@ import (
 )
 
 type ExtraInfo struct {
-	BlockNumber uint64
-	BlockHash   common.Hash
-	BlockFile   *ptypes.BlockFile
-	Tx          *types.Transaction
-	From        common.Address
-	BlockHeader *ptypes.Header
-	BlockDiff   *ptypes.BlockStorageDiff
-	BlockChange *ptypes.BlockChangeNotification
-	Committed   bool
+	BlockNumber     uint64
+	BlockHash       common.Hash
+	BlockFile       *ptypes.BlockFile
+	Tx              *types.Transaction
+	From            common.Address
+	BlockHeader     *ptypes.Header
+	BlockDiff       *ptypes.BlockStorageDiff
+	BlockChange     *ptypes.BlockChangeNotification
+	Committed       bool
+	ChangeContracts map[common.Address]struct{}
 	// metrics timer
 	TxStartTime    time.Time
 	BlockStartTime time.Time
@@ -35,6 +37,7 @@ var (
 	ChainTableBucketPusher *processor.PushProcessor
 	BlockCtx               *ExtraInfo
 	BizChainID             string
+	GlobalHooks            *tracing.Hooks
 )
 
 func InitPipeline(region string, nodeXBucket string, chainTableBucket string, brokers []string, topic string, bizChainID string, s3TmpDir string, isBackup bool) (err error) {
@@ -115,7 +118,6 @@ func GenesisAllocToStateDiff(genesisAlloc types.GenesisAlloc) *ptypes.BlockStora
 			Nonce:    acc.Nonce,
 			CodeHash: crypto.Keccak256Hash(acc.Code),
 		})
-		log.Info("GenesisAlloc", "address", addr.Hex(), "balance", acc.Balance, "nonce", acc.Nonce, "codehash", crypto.Keccak256Hash(acc.Code).Hex())
 		if len(acc.Code) > 0 {
 			diff.NewCodes = append(diff.NewCodes, ptypes.NewCode{
 				CodeHash: crypto.Keccak256Hash(acc.Code),

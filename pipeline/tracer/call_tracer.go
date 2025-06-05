@@ -27,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	ptypes "github.com/ethereum/go-ethereum/pipeline/types"
@@ -45,6 +46,7 @@ type callFrame struct {
 	Output       []byte          `json:"output,omitempty" rlp:"optional"`
 	Error        string          `json:"error,omitempty" rlp:"optional"`
 	RevertReason string          `json:"revertReason,omitempty"`
+	ParentFailed bool            `json:"-"` // Indicates if the parent call failed
 	Calls        []callFrame     `json:"calls,omitempty" rlp:"optional"`
 	Logs         []ptypes.Event  `json:"logs,omitempty" rlp:"optional"`
 
@@ -56,8 +58,7 @@ type callFrame struct {
 
 	// Placed at end on purpose. The RLP will be decoded to 0 instead of
 	// nil if there are non-empty elements after in the struct.
-	Value            *big.Int `json:"value,omitempty" rlp:"optional"`
-	revertedSnapshot bool
+	Value *big.Int `json:"value,omitempty" rlp:"optional"`
 }
 
 func (f callFrame) TypeString() string {
@@ -135,6 +136,13 @@ func (t *callTracer) ToTrace(f *callFrame, traceAddress []int64) ptypes.Trace {
 	if f.Value != nil {
 		value = f.Value
 	}
+	err := ""
+	if f.failed() {
+		err = f.Error
+		if f.RevertReason != "" {
+			err = fmt.Sprintf("%s: %s", f.Error, f.RevertReason)
+		}
+	}
 	return ptypes.Trace{
 		ID:                f.TraceID,
 		From:              strings.ToLower(f.From.Hex()),
@@ -153,6 +161,7 @@ func (t *callTracer) ToTrace(f *callFrame, traceAddress []int64) ptypes.Trace {
 		StorageChange:     f.StorageChange,
 		Subtraces:         int64(len(f.Calls)),
 		TraceAddress:      traceAddress,
+		Error:             err,
 	}
 }
 
@@ -228,11 +237,8 @@ func (t *callTracer) CaptureExit(output []byte, gasUsed uint64, err error) {
 	call.GasUsed = gasUsed
 	call.processOutput(output, err)
 	// Nest call into parent.
-	// 忽略失败的调用
-	if !call.failed() {
-		call.PosInParentTrace = len(t.callstack[size-1].Calls) + len(t.callstack[size-1].Logs)
-		t.callstack[size-1].Calls = append(t.callstack[size-1].Calls, call)
-	}
+	call.PosInParentTrace = len(t.callstack[size-1].Calls) + len(t.callstack[size-1].Logs)
+	t.callstack[size-1].Calls = append(t.callstack[size-1].Calls, call)
 }
 func (*callTracer) CaptureTxStart(gasLimit uint64) {
 }
@@ -240,7 +246,7 @@ func (*callTracer) CaptureTxStart(gasLimit uint64) {
 func (*callTracer) CaptureTxEnd(restGas uint64) {
 }
 
-func (t *callTracer) OnTxStart(tx *types.Transaction, from common.Address) {
+func (t *callTracer) OnTxStart(vmContext *tracing.VMContext, tx *types.Transaction, from common.Address) {
 	t.gasLimit = tx.Gas()
 	t.txID = tx.Hash().Hex()
 }
@@ -250,12 +256,16 @@ func (t *callTracer) OnTxEnd(receipt *types.Receipt, err error) {
 	if err != nil {
 		return
 	}
-	clearFailedLogs(&t.callstack[0], false)
+	setParentFailed(&t.callstack[0], false)
 	setStorageChange(&t.callstack[0])
-	if len(t.callstack) == 1 && !t.callstack[0].failed() {
+	if len(t.callstack) == 1 {
 		topCall := &t.callstack[0]
 		topCall.TraceID = util.ToHash([]string{t.txID, "", "0"})
-		BlockCtx.BlockFile.Traces = append(BlockCtx.BlockFile.Traces, t.ToTrace(topCall, []int64{}))
+		if topCall.failed() {
+			BlockCtx.BlockFile.ErrorTraces = append(BlockCtx.BlockFile.ErrorTraces, t.ToTrace(topCall, []int64{}))
+		} else {
+			BlockCtx.BlockFile.Traces = append(BlockCtx.BlockFile.Traces, t.ToTrace(topCall, []int64{}))
+		}
 		t.addTraceAndLog(topCall, []int64{})
 	}
 }
@@ -300,24 +310,23 @@ func (t *callTracer) Stop(err error) {
 	t.interrupt.Store(true)
 }
 
-// clearFailedLogs clears the logs of a callframe and all its children
-// in case of execution failure.
-func clearFailedLogs(cf *callFrame, parentFailed bool) {
+// setParentFailed recursively sets the ParentFailed flag for the call frame and all its subcalls.
+func setParentFailed(cf *callFrame, parentFailed bool) {
 	failed := cf.failed() || parentFailed
-	// Clear own logs
-	if failed {
-		cf.Logs = nil
-	}
 	for i := range cf.Calls {
-		clearFailedLogs(&cf.Calls[i], failed)
+		cf.Calls[i].ParentFailed = failed
+		setParentFailed(&cf.Calls[i], failed)
 	}
 }
 
 func setStorageChange(cf *callFrame) {
+	if cf.To != nil && cf.SelfStorageChange {
+		BlockCtx.ChangeContracts[*cf.To] = struct{}{}
+	}
 	subCallStorageChange := false
 	for i := range cf.Calls {
 		setStorageChange(&cf.Calls[i])
-		if cf.Calls[i].StorageChange {
+		if cf.Calls[i].StorageChange && !cf.Calls[i].failed() {
 			subCallStorageChange = true
 		}
 	}
@@ -335,10 +344,19 @@ func (t *callTracer) addTraceAndLog(cf *callFrame, traceAddress []int64) {
 	for i := range cf.Logs {
 		cf.Logs[i].ParentTraceID = cf.TraceID
 		cf.Logs[i].ID = util.ToHash([]string{cf.Logs[i].ParentTraceID, fmt.Sprintf("%d", cf.Logs[i].Position)})
-		BlockCtx.BlockFile.Events = append(BlockCtx.BlockFile.Events, cf.Logs[i])
+		if cf.failed() || cf.ParentFailed {
+			cf.Logs[i].LogIndex = 0
+			BlockCtx.BlockFile.ErrorEvents = append(BlockCtx.BlockFile.ErrorEvents, cf.Logs[i])
+		} else {
+			BlockCtx.BlockFile.Events = append(BlockCtx.BlockFile.Events, cf.Logs[i])
+		}
 	}
 	for i := range cf.Calls {
-		BlockCtx.BlockFile.Traces = append(BlockCtx.BlockFile.Traces, t.ToTrace(&cf.Calls[i], childTraceAddress(traceAddress, int64(i))))
+		if cf.failed() || cf.ParentFailed {
+			BlockCtx.BlockFile.ErrorTraces = append(BlockCtx.BlockFile.Traces, t.ToTrace(&cf.Calls[i], childTraceAddress(traceAddress, int64(i))))
+		} else {
+			BlockCtx.BlockFile.Traces = append(BlockCtx.BlockFile.Traces, t.ToTrace(&cf.Calls[i], childTraceAddress(traceAddress, int64(i))))
+		}
 	}
 }
 
