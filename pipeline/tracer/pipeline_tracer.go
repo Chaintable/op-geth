@@ -82,10 +82,13 @@ func (t *PipelineTracer) OnBlockStart(block *types.Block) {
 	BlockCtx.BlockDiff = &ptypes.BlockStorageDiff{}
 	BlockCtx.BlockHeader = util.BuildPilelineBlockHeader(block)
 	BlockCtx.BlockFile = &ptypes.BlockFile{
-		Block:  util.BuildPipelineBlock(block),
-		Events: make([]ptypes.Event, 0),
-		Txs:    make([]ptypes.Transaction, 0),
-		Traces: make([]ptypes.Trace, 0),
+		Block:            util.BuildPipelineBlock(block),
+		Events:           make([]ptypes.Event, 0),
+		Txs:              make([]ptypes.Transaction, 0),
+		Traces:           make([]ptypes.Trace, 0),
+		ErrorEvents:      make([]ptypes.Event, 0),
+		ErrorTraces:      make([]ptypes.Trace, 0),
+		StorageContracts: make([]string, 0),
 	}
 	BlockCtx.Tx = nil
 	BlockCtx.From = common.Address{}
