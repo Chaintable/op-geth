@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -79,6 +80,7 @@ Remove blockchain and state databases`,
 			dbExportCmd,
 			dbMetadataCmd,
 			dbCheckStateContentCmd,
+			dbSetFinalizedCmd,
 		},
 	}
 	dbInspectCmd = &cli.Command{
@@ -100,6 +102,14 @@ Remove blockchain and state databases`,
 		Description: `This command iterates the entire database for 32-byte keys, looking for rlp-encoded trie nodes.
 For each trie node encountered, it checks that the key corresponds to the keccak256(value). If this is not true, this indicates
 a data corruption.`,
+	}
+	dbSetFinalizedCmd = &cli.Command{
+		Action:      dbSetFinalized,
+		Name:        "set-finalized",
+		Usage:       "Set finalized block to specified hash(or to latest hash if not specified)",
+		ArgsUsage:   "<hex-encoded block hash>",
+		Flags:       slices.Concat(utils.NetworkFlags, utils.DatabaseFlags),
+		Description: "Set finalized block to specified hash(or to latest hash if not specified)",
 	}
 	dbStatCmd = &cli.Command{
 		Action: dbStats,
@@ -396,6 +406,40 @@ func dbStats(ctx *cli.Context) error {
 	defer db.Close()
 
 	showLeveldbStats(db)
+	return nil
+}
+
+func dbSetFinalized(ctx *cli.Context) error {
+	stack, _ := makeConfigNode(ctx)
+	defer stack.Close()
+
+	chain, db := utils.MakeChain(ctx, stack, false)
+	defer db.Close()
+
+	var headHash common.Hash
+	var headNumber *uint64
+	if ctx.NArg() > 0 {
+		// set to specified block hash
+		key, err := common.ParseHexOrString(ctx.Args().Get(0))
+		if err != nil {
+			log.Info("Could not decode the block hash", "error", err)
+			return err
+		}
+		headHash = common.BytesToHash(key)
+	} else {
+		// set to latest block hash
+		headHash = rawdb.ReadHeadBlockHash(db)
+	}
+
+	headNumber = rawdb.ReadHeaderNumber(db, headHash)
+	if headNumber == nil {
+		err := fmt.Errorf("head block missing")
+		log.Info("db corrupt", "error", err)
+		return err
+	}
+	chain.SetHead(*headNumber)
+	rawdb.WriteFinalizedBlockHash(db, headHash)
+
 	return nil
 }
 
