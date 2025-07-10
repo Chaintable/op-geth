@@ -42,6 +42,14 @@ import (
 	"github.com/holiman/uint256"
 )
 
+// StateWriter interface for tracking state changes
+type StateWriter interface {
+	WriteAccountStorage(address common.Address, key, originalValue, value common.Hash) error
+	UpdateAccountData(address common.Address, originalBalance, balance *uint256.Int, originalNonce, nonce uint64, originalCodeHash, codeHash common.Hash) error
+	UpdateAccountCode(address common.Address, codeHash common.Hash, code []byte) error
+	DeleteAccount(address common.Address) error
+}
+
 const (
 	// storageDeleteLimit denotes the highest permissible memory allocation
 	// employed for contract storage deletion.
@@ -158,6 +166,9 @@ type StateDB struct {
 
 	// Testing hooks
 	onCommit func(states *triestate.Set) // Hook invoked when commit is performed
+
+	// State change tracking hooks
+	stateWriter StateWriter // Hook invoked when state changes occur
 }
 
 // New creates a new state from a given trie.
@@ -589,6 +600,11 @@ func (s *StateDB) GetTransientState(addr common.Address, key common.Hash) common
 	return s.transientStorage.Get(addr, key)
 }
 
+// SetStateWriter sets the state writer hook for tracking state changes
+func (s *StateDB) SetStateWriter(writer StateWriter) {
+	s.stateWriter = writer
+}
+
 //
 // Setting, updating & deleting state object methods.
 //
@@ -961,6 +977,13 @@ func (s *StateDB) Finalise(deleteEmptyObjects bool) {
 		}
 		if obj.selfDestructed || (deleteEmptyObjects && obj.empty()) {
 			obj.deleted = true
+
+			// Call state writer hook for account deletion if available
+			if s.stateWriter != nil {
+				if err := s.stateWriter.DeleteAccount(obj.address); err != nil {
+					log.Debug("State writer DeleteAccount hook failed", "address", obj.address.Hex(), "error", err)
+				}
+			}
 
 			// We need to maintain account deletions explicitly (will remain
 			// set indefinitely). Note only the first occurred self-destruct

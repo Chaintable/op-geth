@@ -269,3 +269,31 @@ func (ct *CallTracer) GetResult() (json.RawMessage, error) {
 
 func (ct *CallTracer) Stop(err error) {
 }
+
+// UpdateStorageChanges marks traces that caused storage changes
+func (ct *CallTracer) UpdateStorageChanges(stateTracer *StateTracer) {
+	// Get addresses that had storage changes
+	storageContracts := make(map[string]bool)
+	for addr := range stateTracer.StorageChanges {
+		storageContracts[addr.Hex()] = true
+	}
+
+	// Update traces in block file to mark storage changes
+	for i := range ct.blockFile.Traces {
+		trace := &ct.blockFile.Traces[i]
+		if storageContracts[trace.To] {
+			trace.StorageChange = true
+			// If this trace directly modified storage, mark it as self storage change
+			trace.SelfStorageChange = true
+		}
+	}
+
+	// Update error traces as well
+	for i := range ct.blockFile.ErrorTraces {
+		trace := &ct.blockFile.ErrorTraces[i]
+		if storageContracts[trace.To] {
+			trace.StorageChange = true
+			trace.SelfStorageChange = true
+		}
+	}
+}

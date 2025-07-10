@@ -29,6 +29,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie/trienode"
@@ -266,6 +267,15 @@ func (s *stateObject) SetState(key, value common.Hash) {
 
 func (s *stateObject) setState(key, value common.Hash) {
 	s.dirtyStorage[key] = value
+
+	// Call state writer hook if available
+	if s.db.stateWriter != nil {
+		prevValue := s.originStorage[key]
+		if err := s.db.stateWriter.WriteAccountStorage(s.address, key, prevValue, value); err != nil {
+			// Log error but don't fail transaction
+			log.Debug("State writer hook failed", "address", s.address.Hex(), "key", key.Hex(), "error", err)
+		}
+	}
 }
 
 // finalise moves all dirty storage slots into the pending area to be hashed or
@@ -291,6 +301,42 @@ func (s *stateObject) finalise(prefetch bool) {
 		s.data.CodeHash = s.dirtyCodeHash
 		s.dirtyCodeHash = nil
 	}
+
+	// Call state writer hook for account data updates if available
+	if s.db.stateWriter != nil {
+		originalBalance := uint256.NewInt(0)
+		originalNonce := uint64(0)
+		originalCodeHash := types.EmptyCodeHash[:]
+		if s.origin != nil {
+			if s.origin.Balance != nil {
+				originalBalance = s.origin.Balance
+			}
+			originalNonce = s.origin.Nonce
+			originalCodeHash = s.origin.CodeHash
+		}
+
+		currentBalance := s.data.Balance
+		if currentBalance == nil {
+			currentBalance = uint256.NewInt(0)
+		}
+
+		if err := s.db.stateWriter.UpdateAccountData(
+			s.address,
+			originalBalance, currentBalance,
+			originalNonce, s.data.Nonce,
+			common.BytesToHash(originalCodeHash), common.BytesToHash(s.data.CodeHash),
+		); err != nil {
+			log.Debug("State writer UpdateAccountData hook failed", "address", s.address.Hex(), "error", err)
+		}
+
+		// Call code update hook if code changed
+		if s.dirtyCode && len(s.code) > 0 && common.BytesToHash(s.data.CodeHash) != types.EmptyCodeHash {
+			if err := s.db.stateWriter.UpdateAccountCode(s.address, common.BytesToHash(s.data.CodeHash), s.code); err != nil {
+				log.Debug("State writer UpdateAccountCode hook failed", "address", s.address.Hex(), "error", err)
+			}
+		}
+	}
+
 	if s.db.prefetcher != nil && prefetch && len(slotsToPrefetch) > 0 && s.data.Root != types.EmptyRootHash {
 		s.db.prefetcher.prefetch(s.addrHash, s.data.Root, s.address, slotsToPrefetch)
 	}

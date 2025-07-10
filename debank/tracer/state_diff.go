@@ -17,6 +17,7 @@ type StateTracer struct {
 	deletedAccounts map[common.Hash]struct{}
 	storageDiffs    map[common.Hash]map[common.Hash]*uint256.Int
 	newCodes        map[common.Hash]types.NewCode
+	StorageChanges  map[common.Address]struct{} // Public field for access from tracer
 	mu              sync.RWMutex
 }
 
@@ -26,6 +27,7 @@ func NewStateTracer() *StateTracer {
 		deletedAccounts: make(map[common.Hash]struct{}),
 		storageDiffs:    make(map[common.Hash]map[common.Hash]*uint256.Int),
 		newCodes:        make(map[common.Hash]types.NewCode),
+		StorageChanges:  make(map[common.Address]struct{}),
 	}
 }
 
@@ -174,13 +176,6 @@ func (st *StateTracer) GenerateStateDiff(blockHash, parentHash common.Hash) *typ
 		NewCodes:        newCodes,
 	}
 
-	log.Info("Generated state diff",
-		"blockHash", blockHash.Hex(),
-		"newAccounts", len(newAccounts),
-		"deletedAccounts", len(deletedAccounts),
-		"storageDiffs", len(storageDiffs),
-		"newCodes", len(newCodes))
-
 	return diff
 }
 
@@ -192,4 +187,87 @@ func (st *StateTracer) Reset() {
 	st.deletedAccounts = make(map[common.Hash]struct{})
 	st.storageDiffs = make(map[common.Hash]map[common.Hash]*uint256.Int)
 	st.newCodes = make(map[common.Hash]types.NewCode)
+	st.StorageChanges = make(map[common.Address]struct{})
+}
+
+// StateWriter interface implementation
+func (st *StateTracer) WriteAccountStorage(address common.Address, key, originalValue, value common.Hash) error {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+
+	addrHash := crypto.Keccak256Hash(address.Bytes())
+
+	if st.storageDiffs[addrHash] == nil {
+		st.storageDiffs[addrHash] = make(map[common.Hash]*uint256.Int)
+	}
+
+	valueUint256 := uint256.NewInt(0)
+	if value != (common.Hash{}) {
+		valueUint256.SetBytes(value.Bytes())
+	}
+
+	// Use the key hash as index (same as op-erigon implementation)
+	keyHash := crypto.Keccak256Hash(key.Bytes())
+	st.storageDiffs[addrHash][keyHash] = valueUint256
+	st.StorageChanges[address] = struct{}{}
+
+	log.Debug("Storage written via StateWriter", "address", address.Hex(), "key", key.Hex(), "keyHash", keyHash.Hex(), "value", value.Hex())
+	return nil
+}
+
+func (st *StateTracer) UpdateAccountData(address common.Address, originalBalance, balance *uint256.Int, originalNonce, nonce uint64, originalCodeHash, codeHash common.Hash) error {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+
+	addrHash := crypto.Keccak256Hash(address.Bytes())
+	delete(st.deletedAccounts, addrHash)
+
+	st.newAccounts[addrHash] = types.NewAccount{
+		Address:  addrHash,
+		Balance:  balance,
+		Nonce:    nonce,
+		CodeHash: codeHash,
+	}
+
+	log.Debug("Account updated via StateWriter", "address", address.Hex(), "nonce", nonce, "balance", balance)
+	return nil
+}
+
+func (st *StateTracer) UpdateAccountCode(address common.Address, codeHash common.Hash, code []byte) error {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+
+	if codeHash != (common.Hash{}) && len(code) > 0 {
+		st.newCodes[codeHash] = types.NewCode{
+			CodeHash: codeHash,
+			Code:     code,
+		}
+		log.Debug("Code updated via StateWriter", "address", address.Hex(), "codeHash", codeHash.Hex(), "size", len(code))
+	}
+
+	return nil
+}
+
+func (st *StateTracer) DeleteAccount(address common.Address) error {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+
+	addrHash := crypto.Keccak256Hash(address.Bytes())
+	delete(st.newAccounts, addrHash)
+	st.deletedAccounts[addrHash] = struct{}{}
+
+	log.Debug("Account deleted via StateWriter", "address", address.Hex())
+	return nil
+}
+
+// GetStorageContracts returns the addresses of contracts that had storage changes
+func (st *StateTracer) GetStorageContracts() []string {
+	st.mu.RLock()
+	defer st.mu.RUnlock()
+
+	contracts := make([]string, 0, len(st.StorageChanges))
+	for addr := range st.StorageChanges {
+		contracts = append(contracts, addr.Hex())
+	}
+	return contracts
 }

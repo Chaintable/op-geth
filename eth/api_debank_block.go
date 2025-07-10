@@ -206,6 +206,9 @@ func (api *DebankAPI) processRegularBlock(block *coretypes.Block) (*DebankOutPut
 	// Generate state diff
 	stateDiff := stateTracer.GenerateStateDiff(block.Root(), block.ParentHash())
 
+	// Add storage contracts that had changes
+	blockFile.StorageContracts = stateTracer.GetStorageContracts()
+
 	// Build header
 	header := buildPipelineHeader(block)
 
@@ -243,6 +246,9 @@ func (api *DebankAPI) processTransaction(statedb *state.StateDB, block *coretype
 
 	// Create transaction context
 	txContext := core.NewEVMTxContext(msg)
+
+	// Set state writer hook to capture state changes
+	statedb.SetStateWriter(stateTracer)
 
 	// Create EVM
 	vmenv := vm.NewEVM(blockContext, txContext, statedb, chainConfig, vmConfig)
@@ -290,6 +296,14 @@ func (api *DebankAPI) processTransaction(statedb *state.StateDB, block *coretype
 			callTracer.ProcessLog(eventLog, parentTraceID)
 		}
 	}
+
+	// Update traces with storage change information
+	if callTracer != nil {
+		callTracer.UpdateStorageChanges(stateTracer)
+	}
+
+	// Clear state writer hook after transaction processing
+	statedb.SetStateWriter(nil)
 
 	return receipt, nil
 }
