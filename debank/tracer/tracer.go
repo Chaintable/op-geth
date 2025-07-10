@@ -13,7 +13,6 @@ import (
 	"github.com/ethereum/go-ethereum/debank/types"
 )
 
-// CallTracer is a tracer that captures all call traces, events, and state changes
 type CallTracer struct {
 	blockFile   *types.BlockFile
 	txHash      string
@@ -23,7 +22,6 @@ type CallTracer struct {
 	stateTracer *StateTracer
 }
 
-// NewCallTracer creates a new call tracer
 func NewCallTracer(blockFile *types.BlockFile, txHash string, stateTracer *StateTracer) *CallTracer {
 	return &CallTracer{
 		blockFile:   blockFile,
@@ -35,7 +33,6 @@ func NewCallTracer(blockFile *types.BlockFile, txHash string, stateTracer *State
 	}
 }
 
-// CaptureStart implements vm.EVMLogger
 func (ct *CallTracer) CaptureStart(env *vm.EVM, from common.Address, to common.Address, create bool, input []byte, gas uint64, value *big.Int) {
 	var callType string
 	var createType string
@@ -52,13 +49,11 @@ func (ct *CallTracer) CaptureStart(env *vm.EVM, from common.Address, to common.A
 		}
 	}
 
-	// Calculate trace address
 	traceAddress := make([]int64, 0)
 	for i := 0; i < len(ct.callStack); i++ {
 		traceAddress = append(traceAddress, ct.callStack[i].Subtraces)
 	}
 
-	// Generate trace ID
 	var parentTraceID string
 	var posInParentTrace int64
 	if len(ct.callStack) > 0 {
@@ -73,22 +68,29 @@ func (ct *CallTracer) CaptureStart(env *vm.EVM, from common.Address, to common.A
 
 	traceID := generateTraceID(ct.txHash, parentTraceID, posInParentTrace)
 
+	var traceValue *hexutil.Big
+	if value != nil {
+		traceValue = (*hexutil.Big)(value)
+	} else {
+		traceValue = (*hexutil.Big)(big.NewInt(0))
+	}
+
 	trace := &types.Trace{
 		ID:                traceID,
 		From:              from.Hex(),
 		Gas:               big.NewInt(int64(gas)),
 		Input:             hexutil.Bytes(input),
 		To:                to.Hex(),
-		Value:             (*hexutil.Big)(value),
-		GasUsed:           big.NewInt(0), // Will be set in CaptureEnd
+		Value:             traceValue,
+		GasUsed:           big.NewInt(0),
 		Output:            hexutil.Bytes{},
 		CallCreateType:    createType,
 		CallType:          callType,
 		TxID:              ct.txHash,
 		ParentTraceID:     parentTraceID,
 		PosInParentTrace:  posInParentTrace,
-		SelfStorageChange: false, // Will be updated by state tracer
-		StorageChange:     false, // Will be updated by state tracer
+		SelfStorageChange: false,
+		StorageChange:     false,
 		Subtraces:         0,
 		TraceAddress:      traceAddress,
 		Error:             "",
@@ -98,7 +100,6 @@ func (ct *CallTracer) CaptureStart(env *vm.EVM, from common.Address, to common.A
 	ct.traceIdx++
 }
 
-// CaptureEnd implements vm.EVMLogger
 func (ct *CallTracer) CaptureEnd(output []byte, gasUsed uint64, err error) {
 	if len(ct.callStack) == 0 {
 		return
@@ -112,27 +113,19 @@ func (ct *CallTracer) CaptureEnd(output []byte, gasUsed uint64, err error) {
 
 	if err != nil {
 		trace.Error = err.Error()
-		// Add to error traces
 		ct.blockFile.ErrorTraces = append(ct.blockFile.ErrorTraces, *trace)
 	} else {
-		// Add to normal traces
 		ct.blockFile.Traces = append(ct.blockFile.Traces, *trace)
 	}
 }
 
-// CaptureState implements vm.EVMLogger
 func (ct *CallTracer) CaptureState(pc uint64, op vm.OpCode, gas, cost uint64, scope *vm.ScopeContext, rData []byte, depth int, err error) {
-	// We don't need to capture every opcode execution for our use case
 }
 
-// CaptureFault implements vm.EVMLogger
 func (ct *CallTracer) CaptureFault(pc uint64, op vm.OpCode, gas, cost uint64, scope *vm.ScopeContext, depth int, err error) {
-	// Fault handling if needed
 }
 
-// CaptureEnter implements vm.EVMLogger
 func (ct *CallTracer) CaptureEnter(typ vm.OpCode, from common.Address, to common.Address, input []byte, gas uint64, value *big.Int) {
-	// Handle subcalls
 	create := typ == vm.CREATE || typ == vm.CREATE2
 
 	var callType string
@@ -153,13 +146,11 @@ func (ct *CallTracer) CaptureEnter(typ vm.OpCode, from common.Address, to common
 		}
 	}
 
-	// Calculate trace address
 	traceAddress := make([]int64, 0)
 	for i := 0; i < len(ct.callStack); i++ {
 		traceAddress = append(traceAddress, ct.callStack[i].Subtraces)
 	}
 
-	// Generate trace ID
 	var parentTraceID string
 	var posInParentTrace int64
 	if len(ct.callStack) > 0 {
@@ -171,13 +162,20 @@ func (ct *CallTracer) CaptureEnter(typ vm.OpCode, from common.Address, to common
 
 	traceID := generateTraceID(ct.txHash, parentTraceID, posInParentTrace)
 
+	var traceValue *hexutil.Big
+	if value != nil {
+		traceValue = (*hexutil.Big)(value)
+	} else {
+		traceValue = (*hexutil.Big)(big.NewInt(0))
+	}
+
 	trace := &types.Trace{
 		ID:                traceID,
 		From:              from.Hex(),
 		Gas:               big.NewInt(int64(gas)),
 		Input:             hexutil.Bytes(input),
 		To:                to.Hex(),
-		Value:             (*hexutil.Big)(value),
+		Value:             traceValue,
 		GasUsed:           big.NewInt(0),
 		Output:            hexutil.Bytes{},
 		CallCreateType:    "",
@@ -200,7 +198,6 @@ func (ct *CallTracer) CaptureEnter(typ vm.OpCode, from common.Address, to common
 	ct.callStack = append(ct.callStack, trace)
 }
 
-// CaptureExit implements vm.EVMLogger
 func (ct *CallTracer) CaptureExit(output []byte, gasUsed uint64, err error) {
 	if len(ct.callStack) == 0 {
 		return
@@ -220,31 +217,23 @@ func (ct *CallTracer) CaptureExit(output []byte, gasUsed uint64, err error) {
 	}
 }
 
-// CaptureTxStart implements vm.EVMLogger
 func (ct *CallTracer) CaptureTxStart(gasLimit uint64) {
-	// Transaction start
 }
 
-// CaptureTxEnd implements vm.EVMLogger
 func (ct *CallTracer) CaptureTxEnd(restGas uint64) {
-	// Transaction end
 }
 
-// ProcessLog processes event logs after transaction execution
 func (ct *CallTracer) ProcessLog(log *coretypes.Log, parentTraceID string) {
-	// Convert topics to string array
 	topics := make([]string, len(log.Topics))
 	for i, topic := range log.Topics {
 		topics[i] = topic.Hex()
 	}
 
-	// Get selector (first topic for non-anonymous events)
 	var selector string
 	if len(topics) > 0 {
 		selector = topics[0]
 	}
 
-	// Generate event ID
 	eventID := generateEventID(parentTraceID, int64(ct.eventIdx))
 
 	event := types.Event{
@@ -262,26 +251,21 @@ func (ct *CallTracer) ProcessLog(log *coretypes.Log, parentTraceID string) {
 	ct.eventIdx++
 }
 
-// generateTraceID generates a unique trace ID
 func generateTraceID(txID, parentTraceID string, posInParentTrace int64) string {
 	data := txID + parentTraceID + strconv.FormatInt(posInParentTrace, 10)
 	hash := crypto.Keccak256Hash([]byte(data))
 	return hash.Hex()
 }
 
-// generateEventID generates a unique event ID
 func generateEventID(parentTraceID string, position int64) string {
 	data := parentTraceID + strconv.FormatInt(position, 10)
 	hash := crypto.Keccak256Hash([]byte(data))
 	return hash.Hex()
 }
 
-// GetResult returns the final result (not used in our implementation)
 func (ct *CallTracer) GetResult() (json.RawMessage, error) {
 	return nil, nil
 }
 
-// Stop terminates execution of the tracer
 func (ct *CallTracer) Stop(err error) {
-	// Cleanup if needed
 }
