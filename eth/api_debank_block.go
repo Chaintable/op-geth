@@ -359,8 +359,13 @@ func convertStateDumpToBlockStorageDiff(dump state.Dump, block *coretypes.Block)
 			addr := common.HexToAddress(addrStr)
 			addrHash = crypto.Keccak256Hash(addr.Bytes())
 			withPreimageCount++
+		} else if len(addrStr) > 6 && addrStr[:4] == "pre(" && addrStr[len(addrStr)-1:] == ")" {
+			// Address without preimage - extract hash from "pre(0x...)" format
+			hashStr := addrStr[4 : len(addrStr)-1] // Remove "pre(" and ")"
+			addrHash = common.HexToHash(hashStr)
+			withoutPreimageCount++
 		} else {
-			// Address without preimage - use stored hash
+			// Fallback - use stored hash directly
 			addrHash = common.HexToHash(addrStr)
 			withoutPreimageCount++
 		}

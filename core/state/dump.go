@@ -24,6 +24,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
@@ -183,7 +184,16 @@ func (s *StateDB) DumpToCollector(c DumpCollector, conf *DumpConfig) (nextKey []
 					log.Error("Failed to decode the value returned by iterator", "error", err)
 					continue
 				}
-				account.Storage[common.BytesToHash(s.trie.GetKey(storageIt.Key))] = common.Bytes2Hex(content)
+				storageKeyBytes := s.trie.GetKey(storageIt.Key)
+				var storageKeyHash common.Hash
+				if storageKeyBytes != nil {
+					// If preimage exists, use the hash of the original key
+					storageKeyHash = crypto.Keccak256Hash(storageKeyBytes)
+				} else {
+					// If no preimage, use the key hash directly
+					storageKeyHash = common.BytesToHash(storageIt.Key)
+				}
+				account.Storage[storageKeyHash] = common.Bytes2Hex(content)
 			}
 		}
 		c.OnAccount(address, account)
