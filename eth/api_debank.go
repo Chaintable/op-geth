@@ -2,11 +2,13 @@ package eth
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"strings"
 
 	ptracer "github.com/Chaintable/pipeline/tracer"
 	ptypes "github.com/Chaintable/pipeline/types"
+	"github.com/Chaintable/pipeline/util"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/tracing"
@@ -14,6 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/eth/tracers"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
@@ -33,7 +36,43 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 		return nil, err
 	}
 	if block.NumberU64() == 0 {
-		return nil, errors.New("genesis is not traceable")
+		genesis, err := core.ReadGenesis(api.eth.chainDb)
+		if err != nil {
+			return nil, fmt.Errorf("could not read genesis: %w", err)
+		}
+		header := util.BuildPilelineBlockHeader(block)
+		blockDiff := ptracer.GenesisAllocToStateDiff(genesis.Alloc)
+		blockFile := &ptypes.BlockFile{
+			Block:            util.BuildPipelineBlock(block),
+			Txs:              make([]ptypes.Transaction, 0),
+			Events:           make([]ptypes.Event, 0),
+			Traces:           make([]ptypes.Trace, 0),
+			ErrorEvents:      make([]ptypes.Event, 0),
+			ErrorTraces:      make([]ptypes.Trace, 0),
+			StorageContracts: make([]string, 0),
+		}
+		for addr, account := range genesis.Alloc {
+			if len(account.Storage) > 0 {
+				blockFile.StorageContracts = append(blockFile.StorageContracts, strings.ToLower(addr.Hex()))
+			}
+		}
+		var stateDiffBytes []byte
+		if blockDiff != nil {
+			stateDiffBytes, err = util.EncodeToRlp(blockDiff)
+			if err != nil {
+				log.Error("Failed to encode state diff", "err", err)
+				stateDiffBytes = []byte{}
+			}
+		} else {
+			stateDiffBytes = []byte{}
+		}
+
+		return &ptypes.DebankOutPut{
+			BlockFile:      blockFile,
+			Header:         header,
+			StateDiff:      hexutil.Bytes(stateDiffBytes),
+			ValidationHash: blockFile.Validation().ValidationHash,
+		}, nil
 	}
 	// Prepare base state
 	parent, err := api.eth.APIBackend.BlockByHash(ctx, block.ParentHash())
