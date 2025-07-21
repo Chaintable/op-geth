@@ -1186,6 +1186,9 @@ func (s *StateDB) StateDiff(deleteEmptyObjects bool) (root common.Hash, destruct
 				continue
 			}
 			hash := crypto.HashData(buf, key[:])
+			if _, ok := storages[addrHash]; !ok {
+				storages[addrHash] = make(map[common.Hash][]byte)
+			}
 			storages[addrHash][hash] = encode(val)
 		}
 	}
