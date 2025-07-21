@@ -35,6 +35,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/trie/trienode"
 	"github.com/ethereum/go-ethereum/trie/utils"
@@ -1141,6 +1142,57 @@ func (s *StateDB) handleDestruction(noStorageWiping bool) (map[common.Hash]*acco
 // GetTrie returns the account trie.
 func (s *StateDB) GetTrie() Trie {
 	return s.trie
+}
+
+func (s *StateDB) StateDiff(deleteEmptyObjects bool) (root common.Hash, destructs map[common.Hash]struct{}, accounts map[common.Hash][]byte, storages map[common.Hash]map[common.Hash][]byte, codes map[common.Hash][]byte, err error) {
+	root = s.IntermediateRoot(deleteEmptyObjects)
+	destructs = make(map[common.Hash]struct{})
+	accounts = make(map[common.Hash][]byte)
+	storages = make(map[common.Hash]map[common.Hash][]byte)
+	codes = make(map[common.Hash][]byte)
+	var (
+		buf    = crypto.NewKeccakState()
+		encode = func(val common.Hash) []byte {
+			if val == (common.Hash{}) {
+				return nil
+			}
+			blob, _ := rlp.EncodeToBytes(common.TrimLeftZeroes(val[:]))
+			return blob
+		}
+	)
+	for addr, prevObj := range s.stateObjectsDestruct {
+		prev := prevObj.origin
+		if prev == nil {
+			continue
+		}
+		addrHash := crypto.HashData(buf, addr.Bytes())
+		destructs[addrHash] = struct{}{}
+	}
+	for addr, op := range s.mutations {
+		if op.isDelete() {
+			continue
+		}
+		obj := s.stateObjects[addr]
+		if obj == nil {
+			panic("missing state object")
+		}
+		addrHash := crypto.HashData(buf, addr.Bytes())
+		accounts[addrHash] = types.SlimAccountRLP(obj.data)
+		if obj.dirtyCode {
+			codes[common.Hash(obj.CodeHash())] = obj.code
+		}
+		for key, val := range obj.pendingStorage {
+			if val == obj.originStorage[key] {
+				continue
+			}
+			hash := crypto.HashData(buf, key[:])
+			if _, ok := storages[addrHash]; !ok {
+				storages[addrHash] = make(map[common.Hash][]byte)
+			}
+			storages[addrHash][hash] = encode(val)
+		}
+	}
+	return
 }
 
 // commit gathers the state mutations accumulated along with the associated
