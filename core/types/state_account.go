@@ -17,6 +17,8 @@
 package types
 
 import (
+	"bytes"
+	"github.com/ethereum/go-ethereum/rlp"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -31,4 +33,23 @@ type StateAccount struct {
 	Balance  *big.Int
 	Root     common.Hash // merkle root of the storage trie
 	CodeHash []byte
+}
+
+// SlimAccountRLP encodes the state account in 'slim RLP' format.
+func SlimAccountRLP(account StateAccount) []byte {
+	slim := StateAccount{
+		Nonce:   account.Nonce,
+		Balance: account.Balance,
+	}
+	if account.Root != EmptyRootHash {
+		slim.Root = account.Root
+	}
+	if !bytes.Equal(account.CodeHash, EmptyCodeHash[:]) {
+		slim.CodeHash = account.CodeHash
+	}
+	data, err := rlp.EncodeToBytes(slim)
+	if err != nil {
+		panic(err)
+	}
+	return data
 }

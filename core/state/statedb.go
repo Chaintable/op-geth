@@ -500,6 +500,53 @@ func (s *StateDB) GetTransientState(addr common.Address, key common.Hash) common
 	return s.transientStorage.Get(addr, key)
 }
 
+func (s *StateDB) StateDiff(deleteEmptyObjects bool) (root common.Hash, destructs map[common.Hash]struct{}, accounts map[common.Hash]types.StateAccount, storages map[common.Hash]map[common.Hash][]byte, codes map[common.Hash][]byte, err error) {
+	root = s.IntermediateRoot(deleteEmptyObjects)
+	destructs = make(map[common.Hash]struct{})
+	accounts = make(map[common.Hash]types.StateAccount)
+	storages = make(map[common.Hash]map[common.Hash][]byte)
+	codes = make(map[common.Hash][]byte)
+	var (
+		buf    = crypto.NewKeccakState()
+		encode = func(val common.Hash) []byte {
+			if val == (common.Hash{}) {
+				return nil
+			}
+			blob, _ := rlp.EncodeToBytes(common.TrimLeftZeroes(val[:]))
+			return blob
+		}
+	)
+	for addr := range s.stateObjectsDestruct {
+		addrHash := crypto.HashData(buf, addr.Bytes())
+		destructs[addrHash] = struct{}{}
+	}
+	for addr, op := range s.stateObjects {
+		if op.deleted {
+			continue
+		}
+		obj := s.stateObjects[addr]
+		if obj == nil {
+			panic("missing state object")
+		}
+		addrHash := crypto.HashData(buf, addr.Bytes())
+		accounts[addrHash] = obj.data
+		if obj.dirtyCode {
+			codes[common.Hash(obj.CodeHash())] = obj.code
+		}
+		for key, val := range obj.pendingStorage {
+			if val == obj.originStorage[key] {
+				continue
+			}
+			hash := crypto.HashData(buf, key[:])
+			if _, ok := storages[addrHash]; !ok {
+				storages[addrHash] = make(map[common.Hash][]byte)
+			}
+			storages[addrHash][hash] = encode(val)
+		}
+	}
+	return
+}
+
 //
 // Setting, updating & deleting state object methods.
 //

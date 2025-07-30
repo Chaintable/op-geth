@@ -22,11 +22,19 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/rlp"
-
 	txtracelib "github.com/DeBankDeFi/etherlib/pkg/txtracev2"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/debank/tracer"
+	ptracer "github.com/ethereum/go-ethereum/debank/tracer"
+	ptypes "github.com/ethereum/go-ethereum/debank/types"
+	"github.com/ethereum/go-ethereum/debank/util"
+	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/ethereum/go-ethereum/rpc"
+	"strings"
 )
 
 // PublicTxTraceAPI provides an API to tracing transaction or block information.
@@ -62,4 +70,109 @@ func (api *PublicTxTraceAPI) Transaction(ctx context.Context, txHash common.Hash
 	}
 
 	return *flatten, nil
+}
+
+func (api *PublicTxTraceAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (*ptypes.DebankOutPut, error) {
+	block, err := api.e.APIBackend.BlockByNumberOrHash(ctx, blockNrOrHash)
+	if err != nil {
+		return nil, err
+	}
+	if block.NumberU64() == 0 {
+		genesis, err := core.ReadGenesis(api.e.chainDb)
+		if err != nil {
+			return nil, fmt.Errorf("could not read genesis: %w", err)
+		}
+		header := util.BuildPilelineBlockHeader(block)
+		blockDiff := ptracer.GenesisAllocToStateDiff(genesis.Alloc)
+		blockFile := &ptypes.BlockFile{
+			Block:            util.BuildPipelineBlock(block),
+			Txs:              make([]ptypes.Transaction, 0),
+			Events:           make([]ptypes.Event, 0),
+			Traces:           make([]ptypes.Trace, 0),
+			ErrorEvents:      make([]ptypes.Event, 0),
+			ErrorTraces:      make([]ptypes.Trace, 0),
+			StorageContracts: make([]string, 0),
+		}
+		for addr, account := range genesis.Alloc {
+			if len(account.Storage) > 0 {
+				blockFile.StorageContracts = append(blockFile.StorageContracts, strings.ToLower(addr.Hex()))
+			}
+		}
+		var stateDiffBytes []byte
+		if blockDiff != nil {
+			stateDiffBytes, err = util.EncodeToRlp(blockDiff)
+			if err != nil {
+				log.Error("Failed to encode state diff", "err", err)
+				stateDiffBytes = []byte{}
+			}
+		} else {
+			stateDiffBytes = []byte{}
+		}
+
+		return &ptypes.DebankOutPut{
+			BlockFile:      blockFile,
+			Header:         header,
+			StateDiff:      stateDiffBytes,
+			ValidationHash: blockFile.Validation().ValidationHash,
+		}, nil
+	}
+	// Prepare base state
+	parent, err := api.e.APIBackend.BlockByHash(ctx, block.ParentHash())
+	if err != nil {
+		return nil, err
+	}
+	statedb, release, err := api.e.APIBackend.StateAtBlock(ctx, parent, 128, nil, true, false)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	rpcTracer := tracer.NewLocalTracer()
+
+	blockCtx := core.NewEVMBlockContext(block.Header(), api.e.blockchain, nil, api.e.APIBackend.ChainConfig(), statedb)
+
+	rpcTracer.OnBlockStart(block)
+
+	var (
+		txs = block.Transactions()
+		gp  = new(core.GasPool).AddGas(block.GasLimit())
+	)
+
+	cfg := vm.Config{
+		Debug:   true,
+		PreExec: true,
+		Tracer:  rpcTracer,
+	}
+
+	for i, tx := range txs {
+		evm := vm.NewEVM(blockCtx, vm.TxContext{}, statedb, api.e.APIBackend.ChainConfig(), cfg)
+
+		msg, err := core.TransactionToMessage(tx, types.MakeSigner(api.e.APIBackend.ChainConfig(), block.Number()), blockCtx.BaseFee)
+		if err != nil {
+			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+		}
+		statedb.SetTxContext(tx.Hash(), i)
+
+		_, err = core.ApplyMessage(evm, msg, gp)
+		if err != nil {
+			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+		}
+
+		//receipt.SetEffectiveGasPrice(tx, blockCtx.BaseFee)
+	}
+
+	root, destructs, accounts, storages, codes, err := statedb.StateDiff(api.e.APIBackend.ChainConfig().IsEIP158(block.Number()))
+	if err != nil {
+		return nil, fmt.Errorf("could not get state diff: %w", err)
+	}
+
+	if root != block.Header().Root {
+		return nil, fmt.Errorf("state root mismatch: expected %x, got %x", block.Header().Root, root)
+	}
+
+	parentRoot := parent.Root()
+
+	res := rpcTracer.OutPut(parentRoot, root, destructs, accounts, storages, codes)
+
+	return res, nil
 }
