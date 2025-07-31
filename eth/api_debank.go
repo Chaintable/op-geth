@@ -44,8 +44,6 @@ func NewDebankAPI(eth *Ethereum) *DebankAPI {
 		preparing: false,
 	}
 
-	go api.prepareMantleBedrockData()
-
 	return api
 }
 
@@ -103,6 +101,11 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 
 	// If this is the Mantle bedrock block, use specialized handling
 	if block.NumberU64() == MantleBedrockBlockNumber {
+		// Trigger preparation if not ready and not preparing
+		if !api.dataReady && !api.preparing {
+			go api.prepareMantleBedrockData()
+		}
+
 		output, err := api.DebankBlockRaw(ctx, blockNrOrHash)
 		if err != nil {
 			return nil, err
