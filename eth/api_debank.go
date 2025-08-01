@@ -266,11 +266,11 @@ func (api *DebankAPI) prepareMantleBedrockData() {
 		return
 	}
 
-	dump := stateDB.RawDump(&state.DumpConfig{
+	dump := stateDB.RawDump2(&state.DumpConfig{
 		SkipCode:          false,
 		SkipStorage:       false,
 		OnlyWithAddresses: false,
-	})
+	}, api.eth.dataDir)
 
 	log.Info("State dump completed", "accounts", len(dump.Accounts))
 

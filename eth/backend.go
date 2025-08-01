@@ -107,6 +107,8 @@ type Ethereum struct {
 	shutdownTracker *shutdowncheck.ShutdownTracker // Tracks if and when the node has shutdown ungracefully
 
 	preconfTxTracker *locals.PreconfTxTracker
+
+	dataDir string
 }
 
 // New creates a new Ethereum object (including the initialisation of the common Ethereum object),
@@ -177,6 +179,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		p2pServer:       stack.Server(),
 		discmix:         enode.NewFairMix(0),
 		shutdownTracker: shutdowncheck.NewShutdownTracker(chainDb),
+		dataDir:         stack.ResolvePath(""),
 	}
 	bcVersion := rawdb.ReadDatabaseVersion(chainDb)
 	var dbVer = "<nil>"
