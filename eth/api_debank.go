@@ -42,6 +42,7 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 		}
 		header := util.BuildPilelineBlockHeader(block)
 		blockDiff := ptracer.GenesisAllocToStateDiff(genesis.Alloc)
+		blockDiff.Hash = header.StateRoot
 		blockFile := &ptypes.BlockFile{
 			Block:            util.BuildPipelineBlock(block),
 			Txs:              make([]ptypes.Transaction, 0),
