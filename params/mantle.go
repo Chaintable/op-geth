@@ -21,7 +21,7 @@ var (
 		MetaTxV3UpgradeTime:   u64Ptr(1_742_367_600),
 		ProxyOwnerUpgradeTime: u64Ptr(1_742_367_600),
 		MantleEverestTime:     u64Ptr(1_742_367_600),
-		MantleSkadiTime:       nil,
+		MantleSkadiTime:       u64Ptr(1_756_278_000),
 	}
 	MantleSepoliaUpgradeConfig = MantleUpgradeChainConfig{
 		ChainID:               MantleSepoliaChainId,
