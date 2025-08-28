@@ -7,7 +7,7 @@ toolchain go1.23.10
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.2.0
 	github.com/BurntSushi/toml v1.4.0
-	github.com/Chaintable/pipeline v0.0.56-0.20250827065726-b3fc45e62412
+	github.com/Chaintable/pipeline v0.0.56-0.20250828124110-45166f006ea8
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/VictoriaMetrics/fastcache v1.12.2
 	github.com/aws/aws-sdk-go-v2 v1.32.5
