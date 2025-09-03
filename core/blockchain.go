@@ -47,6 +47,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/pipeline/leader"
 	"github.com/ethereum/go-ethereum/pipeline/tracer"
 	ptypes "github.com/ethereum/go-ethereum/pipeline/types"
 	"github.com/ethereum/go-ethereum/pipeline/util"
@@ -1521,9 +1522,13 @@ func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types
 		// 先确保 pipeline tracer 不为空，然后再判断是否需要push kafka
 		// 上一个push kafka的block, 必然存在(至少有genesis block)
 		// 上一个push kafka的block比当前的head block还要新，说明有unwind回退，不需要处理, 即使是fork，等有更新的block的时候再一起push
-		if tracer.NodeXPusher != nil && !tracer.NodeXPusher.IsBackup && tracer.NodeXPusher.LastPushedBlock().BlockNumber <= block.NumberU64() {
-			lastPushBlock := tracer.NodeXPusher.LastPushedBlock()
-			_, dropBlocks, newBlocks := bc.getCommonAncestor(*lastPushBlock, ptypes.BlockContext{
+		isLeader := leader.GlobalManager.IsLeader()
+		leader.GlobalManager.RLock()
+		lastPushedBlock := tracer.NodeXPusher.LastPushedBlock()
+		leader.GlobalManager.RUnlock()
+
+		if tracer.NodeXPusher != nil && isLeader && lastPushedBlock.BlockNumber <= block.NumberU64() {
+			_, dropBlocks, newBlocks := bc.getCommonAncestor(*lastPushedBlock, ptypes.BlockContext{
 				BlockNumber: block.NumberU64(),
 				Hash:        block.Hash(),
 				ParentHash:  block.ParentHash(),
@@ -2400,9 +2405,13 @@ func (bc *BlockChain) SetCanonical(head *types.Block) (common.Hash, error) {
 	// 先确保 pipeline tracer 不为空，然后再判断是否需要push kafka
 	// 上一个push kafka的block, 必然存在(至少有genesis block)
 	// 上一个push kafka的block比当前的head block还要新，说明有unwind回退，不需要处理, 即使是fork，等有更新的block的时候再一起push
-	if tracer.NodeXPusher != nil && !tracer.NodeXPusher.IsBackup && tracer.NodeXPusher.LastPushedBlock().BlockNumber <= head.NumberU64() {
-		lastPushBlock := tracer.NodeXPusher.LastPushedBlock()
-		_, dropBlocks, newBlocks := bc.getCommonAncestor(*lastPushBlock, ptypes.BlockContext{
+	isLeader := leader.GlobalManager.IsLeader()
+	leader.GlobalManager.RLock()
+	lastPushedBlock := tracer.NodeXPusher.LastPushedBlock()
+	leader.GlobalManager.RUnlock()
+
+	if tracer.NodeXPusher != nil && isLeader && lastPushedBlock.BlockNumber <= head.NumberU64() {
+		_, dropBlocks, newBlocks := bc.getCommonAncestor(*lastPushedBlock, ptypes.BlockContext{
 			BlockNumber: head.NumberU64(),
 			Hash:        head.Hash(),
 			ParentHash:  head.ParentHash(),
