@@ -45,9 +45,9 @@ var (
 	WriterRegistry         *writer.WriterRegistry
 )
 
-func InitPipeline(region string, nodeXBucket string, chainTableBucket string, brokers []string, topic string, bizChainID string, version string, s3TmpDir string, isBackup bool) (err error) {
+func InitPipeline(region string, nodeXBucket string, chainTableBucket string, brokers []string, topic string, bizChainID string, version string, s3TmpDir string) (err error) {
 	// Create processors
-	NodeXPusher, err = processor.NewPushProcessor(region, nodeXBucket, brokers, topic, s3TmpDir, isBackup)
+	NodeXPusher, err = processor.NewPushProcessor(region, nodeXBucket, brokers, topic, s3TmpDir)
 	if err != nil {
 		return err
 	}
