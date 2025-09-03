@@ -9,9 +9,11 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/pipeline/leader"
 	"github.com/ethereum/go-ethereum/pipeline/metrics"
 	"github.com/ethereum/go-ethereum/pipeline/processor"
 	ptypes "github.com/ethereum/go-ethereum/pipeline/types"
+	"github.com/ethereum/go-ethereum/pipeline/writer"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/holiman/uint256"
 )
@@ -38,18 +40,99 @@ var (
 	BlockCtx               *ExtraInfo
 	BizChainID             string
 	GlobalHooks            *tracing.Hooks
+	LeaderManager          *leader.Manager
+	WriterRegistry         *writer.WriterRegistry
 )
 
-func InitPipeline(region string, nodeXBucket string, chainTableBucket string, brokers []string, topic string, bizChainID string, s3TmpDir string, isBackup bool) (err error) {
-	NodeXPusher, err = processor.NewPushProcessor(region, nodeXBucket, brokers, topic, s3TmpDir, isBackup)
+func InitPipeline(region string, nodeXBucket string, chainTableBucket string, brokers []string, topic string, bizChainID string, s3TmpDir string) (err error) {
+	// Create processors
+	NodeXPusher, err = processor.NewPushProcessor(region, nodeXBucket, brokers, topic, s3TmpDir)
 	if err != nil {
 		return err
 	}
-	ChainTableBucketPusher, err = processor.NewPushProcessor(region, chainTableBucket, brokers, topic, s3TmpDir, isBackup)
+	ChainTableBucketPusher, err = processor.NewPushProcessor(region, chainTableBucket, brokers, topic, s3TmpDir)
 	if err != nil {
 		return err
 	}
 	BizChainID = bizChainID
+	return nil
+}
+
+// WriterRegistryConfig holds configuration for writer node registration
+type WriterRegistryConfig struct {
+	TTL              int64
+	NodeXBucket      string
+	ChainTableBucket string
+	Region           string
+	Brokers          []string
+	Topic            string
+}
+
+// SetupLeaderElection sets up manual leader election for the processors
+func SetupLeaderElection(etcdEndpoints []string, electionKey string, nodeID string, isBackup *bool, gracePeriod int, writerConfig *WriterRegistryConfig) error {
+	// Create a single leader manager for both processors
+	config := leader.ManagerConfig{
+		EtcdEndpoints: etcdEndpoints,
+		ElectionKey:   electionKey,
+		NodeID:        nodeID,
+		IsBackup:      isBackup,
+		GracePeriod:   time.Duration(gracePeriod) * time.Second,
+		OnBecomeLeader: func() error {
+			// Update last block when becoming leader
+			log.Info("Updating last block info on leader transition")
+			if NodeXPusher != nil {
+				if err := NodeXPusher.UpdateLastBlock(); err != nil {
+					log.Error("Failed to update NodeX last block", "err", err)
+				}
+			}
+			if ChainTableBucketPusher != nil {
+				if err := ChainTableBucketPusher.UpdateLastBlock(); err != nil {
+					log.Error("Failed to update ChainTable last block", "err", err)
+				}
+			}
+			return nil
+		},
+		OnLoseLeader: func() error {
+			return nil
+		},
+	}
+
+	var err error
+	leader.GlobalManager, err = leader.NewManager(&config)
+	if err != nil {
+		return fmt.Errorf("failed to create leader manager: %w", err)
+	}
+
+	// Initialize writer registry in failover mode
+	if writerConfig != nil {
+		// Use the same etcd client from leader manager
+		etcdClient := leader.GlobalManager.GetEtcdClient()
+
+		// Create writer node info
+		nodeInfo := writer.WriterNodeInfo{
+			NodeXBucket:      writerConfig.NodeXBucket,
+			ChainTableBucket: writerConfig.ChainTableBucket,
+			Region:           writerConfig.Region,
+			Brokers:          writerConfig.Brokers,
+			Topic:            writerConfig.Topic,
+		}
+
+		WriterRegistry = writer.NewWriterRegistry(etcdClient, BizChainID, nodeID, nodeInfo, writerConfig.TTL)
+
+		// Register node immediately when initialized (not waiting to become leader)
+		if err := WriterRegistry.RegisterNode(); err != nil {
+			log.Error("Failed to register writer node during initialization", "err", err)
+		} else {
+			log.Info("Writer node registered during initialization", "chainID", BizChainID, "nodeID", nodeID)
+		}
+	}
+
+	if err := leader.GlobalManager.Start(); err != nil {
+		return fmt.Errorf("failed to start leader manager: %w", err)
+	}
+
+	log.Info("Leader election setup completed", "nodeID", nodeID, "electionKey", electionKey)
+
 	return nil
 }
 

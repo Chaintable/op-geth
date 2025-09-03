@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ethereum/go-ethereum/pipeline/leader"
 	"github.com/ethereum/go-ethereum/pipeline/metrics"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -40,8 +42,46 @@ type pipelineTracerConfig struct {
 	Brokers          []string `json:"brokers"`
 	Topic            string   `json:"topic"`
 	S3TempDir        string   `json:"s3_temp_dir"`
-	IsBackup         bool     `json:"is_backup"`
+	IsBackup         *bool    `json:"is_backup"` // nil = auto (use etcd), false = leader in fixed mode, true = backup in fixed mode
 	EnableStateDiff  bool     `json:"enable_state_diff"`
+
+	// Auto failover configurations
+	EtcdEndpoints []string `json:"etcd_endpoints"`
+	ElectionKey   string   `json:"election_key"`
+	NodeID        string   `json:"node_id"`      // default to hostname
+	GracePeriod   int      `json:"grace_period"` // default to 10 seconds, unit is second
+
+	// Writer node registry configurations
+	WriterRegistryTTL int64 `json:"writer_registry_ttl"` // TTL for writer node registration in seconds, default 30
+}
+
+func (config *pipelineTracerConfig) fillDefaultValues() {
+	if config.IsBackup == nil && len(config.EtcdEndpoints) == 0 {
+		log.Crit("IsBackup is nil and etcd endpoints is empty, please set IsBackup to true(manual mode) or add etcd endpoints(auto mode)")
+	}
+	if config.IsBackup != nil && len(config.EtcdEndpoints) > 0 {
+		log.Crit("IsBackup is not nil and etcd endpoints is not empty, please set IsBackup to nil(auto mode) or remove etcd endpoints(manual mode)")
+	}
+	if config.NodeID == "" {
+		// 先尝试从环境变量 HOSTNAME 读取
+		if hostname := os.Getenv("HOSTNAME"); hostname != "" {
+			config.NodeID = hostname
+		} else {
+			// 如果环境变量不存在，则使用系统主机名
+			hostname, err := os.Hostname()
+			if err != nil {
+				log.Crit("Failed to get hostname", "err", err)
+			}
+			config.NodeID = hostname
+		}
+	}
+	if config.GracePeriod == 0 {
+		config.GracePeriod = 10
+	}
+	// Fill default values for writer registry
+	if config.WriterRegistryTTL == 0 {
+		config.WriterRegistryTTL = 10 // 10 seconds default TTL
+	}
 }
 
 func NewPipelineTracer(cfg json.RawMessage) (*PipelineTracer, error) {
@@ -51,6 +91,10 @@ func NewPipelineTracer(cfg json.RawMessage) (*PipelineTracer, error) {
 			return nil, fmt.Errorf("failed to parse config: %v", err)
 		}
 	}
+	config.fillDefaultValues()
+
+	log.Info("NewPipelineTracer", "config", config)
+
 	t := &PipelineTracer{
 		config: config,
 	}
@@ -60,10 +104,52 @@ func NewPipelineTracer(cfg json.RawMessage) (*PipelineTracer, error) {
 
 func (t *PipelineTracer) OnBlockchainInit(chainConfig *params.ChainConfig) {
 	log.Info("Init pipeline with param", "chainConfig", chainConfig.ChainID.String(), "config", t.config)
-	err := InitPipeline(t.config.Region, t.config.NodeXBucket, t.config.ChainTableBucket, t.config.Brokers, t.config.Topic, chainConfig.ChainID.String(), t.config.S3TempDir, t.config.IsBackup)
+
+	// set default election key
+	if t.config.ElectionKey == "" {
+		t.config.ElectionKey = chainConfig.ChainID.String() + "/writers/leader"
+	}
+
+	// Initialize pipeline
+	err := InitPipeline(t.config.Region, t.config.NodeXBucket, t.config.ChainTableBucket,
+		t.config.Brokers, t.config.Topic, chainConfig.ChainID.String(),
+		t.config.S3TempDir)
 	if err != nil {
 		log.Crit("Failed to init pipeline", "err", err)
 	}
+
+	// Prepare writer registry configuration
+	var writerConfig *WriterRegistryConfig
+	// Writer registry is always enabled when etcd endpoints are configured
+	if len(t.config.EtcdEndpoints) > 0 {
+		writerConfig = &WriterRegistryConfig{
+			TTL:              t.config.WriterRegistryTTL,
+			NodeXBucket:      t.config.NodeXBucket,
+			ChainTableBucket: t.config.ChainTableBucket,
+			Region:           t.config.Region,
+			Brokers:          t.config.Brokers,
+			Topic:            t.config.Topic,
+		}
+	}
+
+	// Setup leader election based on configuration
+	err = SetupLeaderElection(t.config.EtcdEndpoints, t.config.ElectionKey,
+		t.config.NodeID, t.config.IsBackup, t.config.GracePeriod, writerConfig)
+	if err != nil {
+		log.Crit("Failed to setup leader election", "err", err)
+		// Continue without election - will remain in backup mode
+	}
+
+	// start upload work should be after leader election
+	err = NodeXPusher.StartUploadWork()
+	if err != nil {
+		log.Crit("Failed to start NodeXPusher upload work", "err", err)
+	}
+	err = ChainTableBucketPusher.StartUploadWork()
+	if err != nil {
+		log.Crit("Failed to start ChainTableBucketPusher upload work", "err", err)
+	}
+
 	metrics.NodeInfo.Update(map[string]string{
 		"chain_id": chainConfig.ChainID.String(),
 		"role":     "writer",
@@ -71,7 +157,28 @@ func (t *PipelineTracer) OnBlockchainInit(chainConfig *params.ChainConfig) {
 }
 
 func (t *PipelineTracer) OnClose() {
-	NodeXPusher.Close()
+	// Unregister writer node if registered
+	if WriterRegistry != nil {
+		if err := WriterRegistry.UnregisterNode(); err != nil {
+			log.Error("Failed to unregister writer node during shutdown", "err", err)
+		} else {
+			log.Info("Writer node unregistered during shutdown")
+		}
+	}
+
+	// Close leader manager if it exists
+	if LeaderManager != nil {
+		LeaderManager.Close()
+		// Clear global reference
+		leader.GlobalManager = nil
+	}
+	// Close processors
+	if NodeXPusher != nil {
+		NodeXPusher.Close()
+	}
+	if ChainTableBucketPusher != nil {
+		ChainTableBucketPusher.Close()
+	}
 }
 
 func (t *PipelineTracer) OnBlockStart(block *types.Block) {
@@ -350,11 +457,7 @@ func (t *PipelineTracer) OnCommit(originRoot common.Hash, root common.Hash, dest
 	// 等待所有上传完成
 	wg.Wait()
 
-	if t.config.IsBackup {
-		log.Info("Backup Upload block", "block number", BlockCtx.BlockNumber, "block hash", BlockCtx.BlockHash.Hex())
-	} else {
-		log.Info("Upload block", "block number", BlockCtx.BlockNumber, "block hash", BlockCtx.BlockHash.Hex())
-	}
+	log.Info("Upload block", "block number", BlockCtx.BlockNumber, "block hash", BlockCtx.BlockHash.Hex())
 
 	// 检查是否有错误
 	if len(uploadErrs) > 0 {
