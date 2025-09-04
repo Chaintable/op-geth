@@ -299,7 +299,7 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 					}
 				}
 
-				root, nodes := tr.Commit(false)
+				root, nodes := tr.Commit(true)
 				sa.Root = root
 
 				mergeLock.Lock()
@@ -324,7 +324,7 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 		}
 	}
 
-	root, nodes := accTr.Commit(false)
+	root, nodes := accTr.Commit(true)
 	// no need to lock
 	if err = mergedNodes.Merge(nodes); err != nil {
 		return common.Hash{}, common.Hash{}, err
