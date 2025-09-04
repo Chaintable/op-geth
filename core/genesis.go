@@ -286,8 +286,8 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 				}
 				batch.Reset()
 			}
-			log.Info("batch written", "nodes", nodesWritten, "owners", ownerCount)
 		}
+		log.Info("batch written", "nodes", nodesWritten, "owners", ownerCount)
 		log.Info("write trie nodes finished", "elapsed", time.Since(start))
 		return nil
 	})
