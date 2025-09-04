@@ -18,10 +18,12 @@ package core
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
+	"runtime"
 	"strings"
 	"time"
 
@@ -42,6 +44,7 @@ import (
 	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/ethereum/go-ethereum/triedb/pathdb"
 	"github.com/holiman/uint256"
+	"golang.org/x/sync/errgroup"
 )
 
 //go:generate go run github.com/fjl/gencodec -type Genesis -field-override genesisSpecMarshaling -out gen_genesis.go
@@ -245,6 +248,23 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 		allocMap[addr] = &types.StateAccount{}
 	}
 
+	dbWorker, _ := errgroup.WithContext(context.Background())
+	dbWorker.SetLimit(1)
+
+	dbWorker.Go(func() error {
+		diskDB := triedb.Disk()
+		batch := diskDB.NewBatch()
+		for _, account := range *ga {
+			if len(account.Code) != 0 {
+				rawdb.WriteCode(batch, crypto.Keccak256Hash(account.Code), account.Code)
+			}
+		}
+		return batch.Write()
+	})
+
+	trWorker, _ := errgroup.WithContext(context.Background())
+	trWorker.SetLimit(runtime.NumCPU())
+
 	for addr, acc := range *ga {
 		sa := allocMap[addr]
 		sa.Nonce = acc.Nonce
@@ -261,21 +281,29 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 		if len(acc.Storage) == 0 {
 			sa.Root = types.EmptyRootHash
 		} else {
-			tr, err := cachingDB.OpenStorageTrie(common.Hash{}, addr, common.Hash{}, nil)
-			if err != nil {
-				return common.Hash{}, common.Hash{}, err
-			}
-
-			for k, v := range acc.Storage {
-				err = tr.UpdateStorage(addr, k[:], common.TrimLeftZeroes(v[:]))
+			trWorker.Go(func() error {
+				tr, err := cachingDB.OpenStorageTrie(common.Hash{}, addr, common.Hash{}, nil)
 				if err != nil {
-					return common.Hash{}, common.Hash{}, err
+					return err
 				}
-			}
 
-			root, _ := tr.Commit(false)
-			sa.Root = root
+				for k, v := range acc.Storage {
+					err = tr.UpdateStorage(addr, k[:], common.TrimLeftZeroes(v[:]))
+					if err != nil {
+						return err
+					}
+				}
+
+				root, _ := tr.Commit(false)
+				sa.Root = root
+				return nil
+			})
 		}
+	}
+
+	err := trWorker.Wait()
+	if err != nil {
+		return common.Hash{}, common.Hash{}, err
 	}
 
 	accTr, err := cachingDB.OpenTrie(common.Hash{})
@@ -295,6 +323,10 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 	var storageRootMessagePasser common.Hash
 	if isIsthmus {
 		storageRootMessagePasser = allocMap[params.OptimismL2ToL1MessagePasser].Root
+	}
+	err = dbWorker.Wait()
+	if err != nil {
+		return common.Hash{}, common.Hash{}, err
 	}
 	// Commit newly generated states into disk if it's not empty.
 	if root != types.EmptyRootHash {
