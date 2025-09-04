@@ -353,15 +353,31 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 	// Commit newly generated states into disk if it's not empty.
 	if root != types.EmptyRootHash {
 		start = time.Now()
-		if err = triedb.Update(root, types.EmptyRootHash, 0, mergedNodes, nil); err != nil {
-			return common.Hash{}, common.Hash{}, err
+		batch := triedb.Disk().NewBatch()
+		nodesWritten := 0
+		batchSize := 0
+		scheme := triedb.Scheme()
+
+		for owner, set := range mergedNodes.Sets {
+			set.ForEachWithOrder(func(path string, n *trienode.Node) {
+
+				rawdb.WriteTrieNode(batch, owner, []byte(path), n.Hash, n.Blob, scheme)
+
+				nodesWritten++
+				batchSize += len(n.Blob)
+
+				if batchSize >= 256*1024*1024 {
+					if err := batch.Write(); err != nil {
+						log.Error("failed to write merged node to disk", "err", err)
+					}
+					batch.Reset()
+					batchSize = 0
+
+					log.Info("batch written", "nodes", nodesWritten, "owner", owner)
+				}
+			})
 		}
-		log.Info("update accounts", "elapsed", time.Since(start))
-		start = time.Now()
-		if err = triedb.Commit(root, true); err != nil {
-			return common.Hash{}, common.Hash{}, err
-		}
-		log.Info("commit trie", "elapsed", time.Since(start))
+		log.Info("write nodes to disk", "elapsed", time.Since(start))
 	}
 	return root, storageRootMessagePasser, nil
 }
