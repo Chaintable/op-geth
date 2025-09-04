@@ -277,11 +277,11 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 				batch.Reset()
 				rawdb.WriteTrieNode(batch, nodes.Owner, []byte(path), n.Hash, n.Blob, scheme)
 				nodesWritten++
-				if err := batch.Write(); err != nil {
-					log.Error("failed to write merged node to disk", "err", err)
-				}
-				log.Info("batch written", "nodes", nodesWritten, "owner", nodes.Owner)
 			})
+			if err := batch.Write(); err != nil {
+				log.Error("failed to write merged node to disk", "err", err)
+			}
+			log.Info("batch written", "nodes", nodesWritten, "owner", nodes.Owner)
 		}
 		log.Info("write trie nodes finished", "elapsed", time.Since(start))
 		return nil
