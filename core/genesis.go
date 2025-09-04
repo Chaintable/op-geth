@@ -25,7 +25,6 @@ import (
 	"math/big"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -253,11 +252,10 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 	dbWorker, _ := errgroup.WithContext(context.Background())
 	dbWorker.SetLimit(1)
 
+	nodesChan := make(chan *trienode.NodeSet, 1000)
+
 	dbWorker.Go(func() error {
 		start := time.Now()
-		defer func() {
-			log.Info("write code finished", "elapsed", time.Since(start))
-		}()
 		diskDB := triedb.Disk()
 		batch := diskDB.NewBatch()
 		for _, account := range *ga {
@@ -265,14 +263,32 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 				rawdb.WriteCode(batch, crypto.Keccak256Hash(account.Code), account.Code)
 			}
 		}
-		return batch.Write()
+		if err := batch.Write(); err != nil {
+			return err
+		}
+		log.Info("write code finished", "elapsed", time.Since(start))
+
+		scheme := triedb.Scheme()
+		var nodesWritten int
+
+		start = time.Now()
+		for nodes := range nodesChan {
+			nodes.ForEachWithOrder(func(path string, n *trienode.Node) {
+				batch.Reset()
+				rawdb.WriteTrieNode(batch, nodes.Owner, []byte(path), n.Hash, n.Blob, scheme)
+				nodesWritten++
+				if err := batch.Write(); err != nil {
+					log.Error("failed to write merged node to disk", "err", err)
+				}
+				log.Info("batch written", "nodes", nodesWritten, "owner", nodes.Owner)
+			})
+		}
+		log.Info("write trie nodes finished", "elapsed", time.Since(start))
+		return nil
 	})
 
 	trWorker, _ := errgroup.WithContext(context.Background())
 	trWorker.SetLimit(runtime.NumCPU())
-
-	mergedNodes := &trienode.MergedNodeSet{Sets: make(map[common.Hash]*trienode.NodeSet, len(*ga))}
-	var mergeLock sync.Mutex
 
 	start := time.Now()
 	for addr, acc := range *ga {
@@ -307,9 +323,9 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 				root, nodes := tr.Commit(true)
 				sa.Root = root
 
-				mergeLock.Lock()
-				defer mergeLock.Unlock()
-				return mergedNodes.Merge(nodes)
+				nodesChan <- nodes
+
+				return nil
 			})
 		}
 	}
@@ -335,12 +351,9 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 	root, nodes := accTr.Commit(true)
 	log.Info("commit accounts", "elapsed", time.Since(start))
 
-	start = time.Now()
-	// no need to lock
-	if err = mergedNodes.Merge(nodes); err != nil {
-		return common.Hash{}, common.Hash{}, err
-	}
-	log.Info("merge nodes", "elapsed", time.Since(start))
+	nodesChan <- nodes
+	close(nodesChan)
+
 	// get the storage root of the L2ToL1MessagePasser contract
 	var storageRootMessagePasser common.Hash
 	if isIsthmus {
@@ -349,35 +362,6 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 
 	if err = dbWorker.Wait(); err != nil {
 		return common.Hash{}, common.Hash{}, err
-	}
-	// Commit newly generated states into disk if it's not empty.
-	if root != types.EmptyRootHash {
-		start = time.Now()
-		batch := triedb.Disk().NewBatch()
-		nodesWritten := 0
-		batchSize := 0
-		scheme := triedb.Scheme()
-
-		for owner, set := range mergedNodes.Sets {
-			set.ForEachWithOrder(func(path string, n *trienode.Node) {
-
-				rawdb.WriteTrieNode(batch, owner, []byte(path), n.Hash, n.Blob, scheme)
-
-				nodesWritten++
-				batchSize += len(n.Blob)
-
-				if batchSize >= 256*1024*1024 {
-					if err := batch.Write(); err != nil {
-						log.Error("failed to write merged node to disk", "err", err)
-					}
-					batch.Reset()
-					batchSize = 0
-
-					log.Info("batch written", "nodes", nodesWritten, "owner", owner)
-				}
-			})
-		}
-		log.Info("write nodes to disk", "elapsed", time.Since(start))
 	}
 	return root, storageRootMessagePasser, nil
 }
