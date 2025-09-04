@@ -25,6 +25,7 @@ import (
 	"math/big"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -41,6 +42,7 @@ import (
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/superchain"
 	"github.com/ethereum/go-ethereum/trie"
+	"github.com/ethereum/go-ethereum/trie/trienode"
 	"github.com/ethereum/go-ethereum/triedb"
 	"github.com/ethereum/go-ethereum/triedb/pathdb"
 	"github.com/holiman/uint256"
@@ -265,6 +267,9 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 	trWorker, _ := errgroup.WithContext(context.Background())
 	trWorker.SetLimit(runtime.NumCPU())
 
+	mergedNodes := &trienode.MergedNodeSet{Sets: make(map[common.Hash]*trienode.NodeSet, len(*ga))}
+	var mergeLock sync.Mutex
+
 	for addr, acc := range *ga {
 		sa := allocMap[addr]
 		sa.Nonce = acc.Nonce
@@ -294,15 +299,17 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 					}
 				}
 
-				root, _ := tr.Commit(false)
+				root, nodes := tr.Commit(false)
 				sa.Root = root
-				return nil
+
+				mergeLock.Lock()
+				defer mergeLock.Unlock()
+				return mergedNodes.Merge(nodes)
 			})
 		}
 	}
 
-	err := trWorker.Wait()
-	if err != nil {
+	if err := trWorker.Wait(); err != nil {
 		return common.Hash{}, common.Hash{}, err
 	}
 
@@ -317,20 +324,24 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 		}
 	}
 
-	root, _ := accTr.Commit(false)
+	root, nodes := accTr.Commit(false)
+	// no need to lock
+	if err = mergedNodes.Merge(nodes); err != nil {
+		return common.Hash{}, common.Hash{}, err
+	}
 
 	// get the storage root of the L2ToL1MessagePasser contract
 	var storageRootMessagePasser common.Hash
 	if isIsthmus {
 		storageRootMessagePasser = allocMap[params.OptimismL2ToL1MessagePasser].Root
 	}
-	err = dbWorker.Wait()
-	if err != nil {
+
+	if err = dbWorker.Wait(); err != nil {
 		return common.Hash{}, common.Hash{}, err
 	}
 	// Commit newly generated states into disk if it's not empty.
 	if root != types.EmptyRootHash {
-		if err := triedb.Commit(root, true); err != nil {
+		if err = triedb.Update(root, types.EmptyRootHash, 0, mergedNodes, nil); err != nil {
 			return common.Hash{}, common.Hash{}, err
 		}
 	}
