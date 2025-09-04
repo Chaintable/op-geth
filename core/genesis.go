@@ -254,6 +254,10 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 	dbWorker.SetLimit(1)
 
 	dbWorker.Go(func() error {
+		start := time.Now()
+		defer func() {
+			log.Info("write code finished", "elapsed", time.Since(start))
+		}()
 		diskDB := triedb.Disk()
 		batch := diskDB.NewBatch()
 		for _, account := range *ga {
@@ -270,6 +274,7 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 	mergedNodes := &trienode.MergedNodeSet{Sets: make(map[common.Hash]*trienode.NodeSet, len(*ga))}
 	var mergeLock sync.Mutex
 
+	start := time.Now()
 	for addr, acc := range *ga {
 		sa := allocMap[addr]
 		sa.Nonce = acc.Nonce
@@ -313,6 +318,9 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 		return common.Hash{}, common.Hash{}, err
 	}
 
+	log.Info("calculate accounts", "elapsed", time.Since(start))
+
+	start = time.Now()
 	accTr, err := cachingDB.OpenTrie(common.Hash{})
 	if err != nil {
 		return common.Hash{}, common.Hash{}, err
@@ -325,11 +333,14 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 	}
 
 	root, nodes := accTr.Commit(true)
+	log.Info("commit accounts", "elapsed", time.Since(start))
+
+	start = time.Now()
 	// no need to lock
 	if err = mergedNodes.Merge(nodes); err != nil {
 		return common.Hash{}, common.Hash{}, err
 	}
-
+	log.Info("merge nodes", "elapsed", time.Since(start))
 	// get the storage root of the L2ToL1MessagePasser contract
 	var storageRootMessagePasser common.Hash
 	if isIsthmus {
@@ -341,12 +352,16 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 	}
 	// Commit newly generated states into disk if it's not empty.
 	if root != types.EmptyRootHash {
+		start = time.Now()
 		if err = triedb.Update(root, types.EmptyRootHash, 0, mergedNodes, nil); err != nil {
 			return common.Hash{}, common.Hash{}, err
 		}
+		log.Info("update accounts", "elapsed", time.Since(start))
+		start = time.Now()
 		if err = triedb.Commit(root, true); err != nil {
 			return common.Hash{}, common.Hash{}, err
 		}
+		log.Info("commit trie", "elapsed", time.Since(start))
 	}
 	return root, storageRootMessagePasser, nil
 }
