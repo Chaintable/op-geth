@@ -344,6 +344,9 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 		if err = triedb.Update(root, types.EmptyRootHash, 0, mergedNodes, nil); err != nil {
 			return common.Hash{}, common.Hash{}, err
 		}
+		if err = triedb.Commit(root, true); err != nil {
+			return common.Hash{}, common.Hash{}, err
+		}
 	}
 	return root, storageRootMessagePasser, nil
 }
