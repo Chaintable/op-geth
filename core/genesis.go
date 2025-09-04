@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -423,10 +424,12 @@ func SetupGenesisBlockWithOverride(db ethdb.Database, triedb *triedb.Database, g
 			return nil, common.Hash{}, nil, err
 		}
 
+		start := time.Now()
 		block, err := genesis.Commit(db, triedb)
 		if err != nil {
 			return nil, common.Hash{}, nil, err
 		}
+		log.Info("commit genesis", "elapsed", time.Since(start))
 		return genesis.Config, block.Hash(), nil, nil
 	}
 	log.Info("Genesis hash", "hash", ghash)
@@ -705,19 +708,24 @@ func (g *Genesis) Commit(db ethdb.Database, triedb *triedb.Database) (*types.Blo
 			stateRoot = *g.StateHash
 		}
 	} else {
+		start := time.Now()
 		// flush the data to disk and compute the state root
 		stateRoot, storageRootMessagePasser, err = flushAlloc(&g.Alloc, triedb, g.Config.IsIsthmus(g.Timestamp))
 		if err != nil {
 			return nil, err
 		}
+		log.Info("flush alloc", "elapsed", time.Since(start))
 	}
 	block := g.toBlockWithRoot(stateRoot, storageRootMessagePasser)
 
+	start := time.Now()
 	// Marshal the genesis state specification and persist.
 	blob, err := json.Marshal(g.Alloc)
 	if err != nil {
 		return nil, err
 	}
+	log.Info("marshal alloc", "elapsed", time.Since(start))
+	start = time.Now()
 	batch := db.NewBatch()
 	rawdb.WriteGenesisStateSpec(batch, block.Hash(), blob)
 	rawdb.WriteBlock(batch, block)
@@ -734,7 +742,10 @@ func (g *Genesis) Commit(db ethdb.Database, triedb *triedb.Database) (*types.Blo
 		rawdb.WriteGenesisHeader(batch, block.Header())
 	}
 
-	return block, batch.Write()
+	err = batch.Write()
+	log.Info("batch write", "elapsed", time.Since(start))
+
+	return block, err
 }
 
 // MustCommit writes the genesis block and state to db, panicking on error.
