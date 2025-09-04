@@ -232,6 +232,79 @@ func flushAlloc(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus bool)
 	return root, storageRootMessagePasser, nil
 }
 
+func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus bool) (common.Hash, common.Hash, error) {
+	if triedb.IsVerkle() {
+		return common.Hash{}, common.Hash{}, errors.New("not supported yet")
+	}
+
+	allocMap := make(map[common.Address]*types.StateAccount, len(*ga))
+
+	cachingDB := state.NewDatabase(triedb, nil)
+
+	for addr := range *ga {
+		allocMap[addr] = &types.StateAccount{}
+	}
+
+	for addr, acc := range *ga {
+		sa := allocMap[addr]
+		sa.Nonce = acc.Nonce
+		var b uint256.Int
+		b.SetFromBig(acc.Balance)
+		sa.Balance = &b
+		if len(acc.Code) == 0 {
+			sa.CodeHash = types.EmptyCodeHash[:]
+		} else {
+			codeHash := crypto.Keccak256Hash(acc.Code)
+			sa.CodeHash = codeHash[:]
+		}
+
+		if len(acc.Storage) == 0 {
+			sa.Root = types.EmptyRootHash
+		} else {
+			tr, err := cachingDB.OpenStorageTrie(common.Hash{}, addr, common.Hash{}, nil)
+			if err != nil {
+				return common.Hash{}, common.Hash{}, err
+			}
+
+			for k, v := range acc.Storage {
+				err = tr.UpdateStorage(addr, k[:], common.TrimLeftZeroes(v[:]))
+				if err != nil {
+					return common.Hash{}, common.Hash{}, err
+				}
+			}
+
+			root, _ := tr.Commit(false)
+			sa.Root = root
+		}
+	}
+
+	accTr, err := cachingDB.OpenTrie(common.Hash{})
+	if err != nil {
+		return common.Hash{}, common.Hash{}, err
+	}
+
+	for addr, acc := range allocMap {
+		if err = accTr.UpdateAccount(addr, acc, 0); err != nil {
+			return common.Hash{}, common.Hash{}, err
+		}
+	}
+
+	root, _ := accTr.Commit(false)
+
+	// get the storage root of the L2ToL1MessagePasser contract
+	var storageRootMessagePasser common.Hash
+	if isIsthmus {
+		storageRootMessagePasser = allocMap[params.OptimismL2ToL1MessagePasser].Root
+	}
+	// Commit newly generated states into disk if it's not empty.
+	if root != types.EmptyRootHash {
+		if err := triedb.Commit(root, true); err != nil {
+			return common.Hash{}, common.Hash{}, err
+		}
+	}
+	return root, storageRootMessagePasser, nil
+}
+
 func getGenesisState(db ethdb.Database, blockhash common.Hash) (alloc types.GenesisAlloc, err error) {
 	blob := rawdb.ReadGenesisStateSpec(db, blockhash)
 	if len(blob) != 0 {
@@ -711,7 +784,7 @@ func (g *Genesis) Commit(db ethdb.Database, triedb *triedb.Database) (*types.Blo
 	} else {
 		start := time.Now()
 		// flush the data to disk and compute the state root
-		stateRoot, storageRootMessagePasser, err = flushAlloc(&g.Alloc, triedb, g.Config.IsIsthmus(g.Timestamp))
+		stateRoot, storageRootMessagePasser, err = flushAllocFast(&g.Alloc, triedb, g.Config.IsIsthmus(g.Timestamp))
 		if err != nil {
 			return nil, err
 		}
