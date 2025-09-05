@@ -363,6 +363,10 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 				root, nodes := tr.Commit(true)
 				sa.Root = root
 
+				if len(nodes.Nodes) > 100_0000 {
+					log.Info("large trie", "addr", addr, "root", root, "nodes num", len(nodes.Nodes))
+				}
+
 				nodesChan <- nodes
 
 				return nil
