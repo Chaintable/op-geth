@@ -255,7 +255,7 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 	nodesChan := make(chan *trienode.NodeSet, 1000)
 
 	dbWorker.Go(func() error {
-		start := time.Now()
+		start0 := time.Now()
 		diskDB := triedb.Disk()
 		batch := diskDB.NewBatch()
 		for _, account := range *ga {
@@ -266,7 +266,7 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 		if err := batch.Write(); err != nil {
 			return err
 		}
-		log.Info("write code finished", "elapsed", time.Since(start))
+		log.Info("write code finished", "elapsed", time.Since(start0))
 
 		var nodesWritten int
 		var ownerCount int
@@ -275,11 +275,11 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 
 		defer func() {
 			log.Info("batch written", "nodes", nodesWritten, "owners", ownerCount)
-			log.Info("write trie nodes finished", "elapsed", time.Since(start))
+			log.Info("write trie nodes finished", "elapsed", time.Since(start0))
 		}()
 
 		batch.Reset()
-		start = time.Now()
+		start := time.Now()
 		for {
 			select {
 			case nodes, ok := <-nodesChan:
