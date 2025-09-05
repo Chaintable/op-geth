@@ -304,6 +304,14 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 
 				for _, n := range nodes.Nodes {
 					rawdb.WriteLegacyTrieNode(batch, n.Hash, n.Blob)
+					if batch.ValueSize() > 1<<30 {
+						start := time.Now()
+						if err := batch.Write(); err != nil {
+							return err
+						}
+						log.Info("oversize batch written", "elapsed", time.Since(start))
+						batch.Reset()
+					}
 				}
 				nodesWritten += len(nodes.Nodes)
 				ownerCount++
