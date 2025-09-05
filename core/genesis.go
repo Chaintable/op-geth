@@ -272,24 +272,31 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 		var nodesWritten int
 		var ownerCount int
 
+		defer func() {
+			log.Info("batch written", "nodes", nodesWritten, "owners", ownerCount)
+			log.Info("write trie nodes finished", "elapsed", time.Since(start))
+		}()
+
 		batch.Reset()
 		start = time.Now()
-		for nodes := range nodesChan {
-			nodes.ForEachWithOrder(func(path string, n *trienode.Node) {
-				rawdb.WriteTrieNode(batch, nodes.Owner, []byte(path), n.Hash, n.Blob, scheme)
-				nodesWritten++
-			})
-			ownerCount++
-			if batch.ValueSize() > 1<<25 {
+		for {
+			select {
+			case nodes, ok := <-nodesChan:
+				if !ok {
+					return batch.Write()
+				}
+				nodes.ForEachWithOrder(func(path string, n *trienode.Node) {
+					rawdb.WriteTrieNode(batch, nodes.Owner, []byte(path), n.Hash, n.Blob, scheme)
+					nodesWritten++
+				})
+				ownerCount++
+			default:
 				if err := batch.Write(); err != nil {
 					log.Error("failed to write merged node to disk", "err", err)
 				}
 				batch.Reset()
 			}
 		}
-		log.Info("batch written", "nodes", nodesWritten, "owners", ownerCount)
-		log.Info("write trie nodes finished", "elapsed", time.Since(start))
-		return nil
 	})
 
 	trWorker, _ := errgroup.WithContext(context.Background())
