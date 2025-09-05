@@ -268,9 +268,10 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 		}
 		log.Info("write code finished", "elapsed", time.Since(start))
 
-		scheme := triedb.Scheme()
 		var nodesWritten int
 		var ownerCount int
+		var batchWriteCount int
+		var batchWriteElapsed time.Duration
 
 		defer func() {
 			log.Info("batch written", "nodes", nodesWritten, "owners", ownerCount)
@@ -283,17 +284,25 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 			select {
 			case nodes, ok := <-nodesChan:
 				if !ok {
-					return batch.Write()
+					start = time.Now()
+					err := batch.Write()
+					log.Info("internal batch written", "count", batchWriteCount, "elapsed", batchWriteElapsed)
+					log.Info("last batch written", "elapsed", time.Since(start))
+					return err
 				}
-				nodes.ForEachWithOrder(func(path string, n *trienode.Node) {
-					rawdb.WriteTrieNode(batch, nodes.Owner, []byte(path), n.Hash, n.Blob, scheme)
-					nodesWritten++
-				})
+
+				for _, n := range nodes.Nodes {
+					rawdb.WriteLegacyTrieNode(batch, n.Hash, n.Blob)
+				}
+				nodesWritten += len(nodes.Nodes)
 				ownerCount++
 			default:
+				batchWriteCount++
+				start = time.Now()
 				if err := batch.Write(); err != nil {
 					log.Error("failed to write merged node to disk", "err", err)
 				}
+				batchWriteElapsed += time.Since(start)
 				batch.Reset()
 			}
 		}
