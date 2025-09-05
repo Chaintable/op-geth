@@ -309,7 +309,7 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 						if err := batch.Write(); err != nil {
 							return err
 						}
-						log.Info("oversize batch written", "elapsed", time.Since(start))
+						log.Info("oversize batch written", "owner", nodes.Owner, "elapsed", time.Since(start))
 						batch.Reset()
 					}
 				}
