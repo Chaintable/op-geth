@@ -252,7 +252,7 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 	dbWorker, _ := errgroup.WithContext(context.Background())
 	dbWorker.SetLimit(1)
 
-	nodesChan := make(chan *trienode.NodeSet, 1000)
+	nodesChan := make(chan *trienode.NodeSet, 2000)
 
 	dbWorker.Go(func() error {
 		start0 := time.Now()
@@ -291,6 +291,15 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 					log.Info("internal batch written", "count", batchWriteCount, "elapsed", batchWriteElapsed)
 					log.Info("last batch written", "elapsed", time.Since(start))
 					return err
+				}
+
+				if batch.ValueSize() > 1<<30 {
+					start := time.Now()
+					if err := batch.Write(); err != nil {
+						return err
+					}
+					log.Info("oversize batch written", "elapsed", time.Since(start))
+					batch.Reset()
 				}
 
 				for _, n := range nodes.Nodes {
