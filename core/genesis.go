@@ -258,8 +258,10 @@ func flushAllocFast(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus b
 		start0 := time.Now()
 		diskDB := triedb.Disk()
 		batch := diskDB.NewBatch()
+		// save empty code
+		rawdb.WriteCode(batch, crypto.Keccak256Hash(nil), nil)
 		for _, account := range *ga {
-			if len(account.Code) != 0 {
+			if len(account.Code) > 0 {
 				rawdb.WriteCode(batch, crypto.Keccak256Hash(account.Code), account.Code)
 			}
 		}
