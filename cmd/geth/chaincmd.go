@@ -765,7 +765,7 @@ func verifyGenesisInternal(ctx *cli.Context, genesis core.Genesis, ignoreAddress
 	stack, _ := makeConfigNode(ctx)
 	defer stack.Close()
 
-	chaindb, err := stack.OpenDatabaseWithFreezer("chaindata", 0, 0, ctx.String(utils.AncientFlag.Name), "", false)
+	chaindb, err := stack.OpenDatabaseWithFreezer("chaindata", 512, 1024, ctx.String(utils.AncientFlag.Name), "", true)
 	if err != nil {
 		utils.Fatalf("Failed to open database: %v", err)
 	}
@@ -795,10 +795,9 @@ func verifyGenesisInternal(ctx *cli.Context, genesis core.Genesis, ignoreAddress
 	accountsToVerify := make([]struct {
 		Address common.Address
 		Account *types.Account
-	}, 0)
+	}, len(genesis.Alloc))
 
 	for addr, expectedAccount := range genesis.Alloc {
-		// Skip ignored addresses
 		if ignoreAddresses != nil && ignoreAddresses[addr] {
 			log.Info("Skipping ignored address", "address", addr.Hex())
 			continue
@@ -811,7 +810,6 @@ func verifyGenesisInternal(ctx *cli.Context, genesis core.Genesis, ignoreAddress
 
 	log.Info("Starting concurrent verification", "total_accounts", len(accountsToVerify))
 
-	// Configuration for concurrent processing
 	numWorkers := runtime.NumCPU()
 	if numWorkers > len(accountsToVerify) {
 		numWorkers = len(accountsToVerify)
@@ -822,13 +820,9 @@ func verifyGenesisInternal(ctx *cli.Context, genesis core.Genesis, ignoreAddress
 
 	log.Info("Using concurrent workers", "workers", numWorkers)
 
-	// Create channels for results
 	resultChan := make(chan AccountVerificationResult, len(accountsToVerify))
-
-	// Use WaitGroup to wait for all goroutines to complete
 	var wg sync.WaitGroup
 
-	// Process accounts in batches
 	accountsPerWorker := len(accountsToVerify) / numWorkers
 	if len(accountsToVerify)%numWorkers != 0 {
 		accountsPerWorker++
