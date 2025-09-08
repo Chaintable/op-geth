@@ -28,6 +28,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -47,6 +48,66 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
+
+// AccountVerificationResult holds the result of verifying a single account
+type AccountVerificationResult struct {
+	Address  common.Address
+	Errors   []string
+	Verified bool
+}
+
+// verifyAccount verifies a single account against the expected state
+func verifyAccount(addr common.Address, expectedAccount *types.Account, stateDB state.Database, genesisRoot common.Hash, resultChan chan<- AccountVerificationResult) {
+	result := AccountVerificationResult{
+		Address:  addr,
+		Errors:   make([]string, 0),
+		Verified: true,
+	}
+
+	// Create a new StateDB instance for this worker
+	statedb, err := state.New(genesisRoot, stateDB)
+	if err != nil {
+		result.Errors = append(result.Errors, fmt.Sprintf("Failed to create state database: %v", err))
+		result.Verified = false
+		resultChan <- result
+		return
+	}
+
+	// Verify balance
+	expectedBalance := uint256.MustFromBig(expectedAccount.Balance)
+	actualBalance := statedb.GetBalance(addr)
+	if actualBalance.Cmp(expectedBalance) != 0 {
+		result.Errors = append(result.Errors, fmt.Sprintf("Balance mismatch: expected %v, actual %v", expectedBalance, actualBalance))
+		result.Verified = false
+	}
+
+	// Verify nonce
+	expectedNonce := expectedAccount.Nonce
+	actualNonce := statedb.GetNonce(addr)
+	if actualNonce != expectedNonce {
+		result.Errors = append(result.Errors, fmt.Sprintf("Nonce mismatch: expected %v, actual %v", expectedNonce, actualNonce))
+		result.Verified = false
+	}
+
+	// Verify code
+	expectedCode := expectedAccount.Code
+	actualCode := statedb.GetCode(addr)
+	if !bytes.Equal(actualCode, expectedCode) {
+		result.Errors = append(result.Errors, fmt.Sprintf("Code mismatch: expected %v, actual %v", hexutil.Encode(expectedCode), hexutil.Encode(actualCode)))
+		result.Verified = false
+	}
+
+	// Verify storage
+	for key, expectedValue := range expectedAccount.Storage {
+		actualValue := statedb.GetState(addr, key)
+		if actualValue != expectedValue {
+			result.Errors = append(result.Errors, fmt.Sprintf("Storage mismatch at key %v: expected %v, actual %v", key.Hex(), expectedValue.Hex(), actualValue.Hex()))
+			result.Verified = false
+		}
+	}
+
+	resultChan <- result
+}
 
 var (
 	initCommand = &cli.Command{
@@ -697,8 +758,9 @@ func pruneHistory(ctx *cli.Context) error {
 	return nil
 }
 
-func verifyGenesisInternal(ctx *cli.Context, genesis *core.Genesis, ignoreAddresses map[common.Address]bool) error {
+func verifyGenesisInternal(ctx *cli.Context, genesis core.Genesis, ignoreAddresses map[common.Address]bool) error {
 	start := time.Now()
+
 	// Open the database
 	stack, _ := makeConfigNode(ctx)
 	defer stack.Close()
@@ -726,16 +788,14 @@ func verifyGenesisInternal(ctx *cli.Context, genesis *core.Genesis, ignoreAddres
 	triedb := utils.MakeTrieDatabase(ctx, chaindb, ctx.Bool(utils.CachePreimagesFlag.Name), true, genesis.IsVerkle())
 	defer triedb.Close()
 
-	// Create state database
+	// Create state database (shared across workers)
 	stateDB := state.NewDatabase(triedb, nil)
-	statedb, err := state.New(genesisBlock.Root(), stateDB)
-	if err != nil {
-		utils.Fatalf("Failed to create state database: %v", err)
-	}
 
-	// Verify accounts
-	verifiedCount := 0
-	errorCount := 0
+	// Prepare accounts for verification
+	accountsToVerify := make([]struct {
+		Address common.Address
+		Account *types.Account
+	}, 0)
 
 	for addr, expectedAccount := range genesis.Alloc {
 		// Skip ignored addresses
@@ -743,82 +803,107 @@ func verifyGenesisInternal(ctx *cli.Context, genesis *core.Genesis, ignoreAddres
 			log.Info("Skipping ignored address", "address", addr.Hex())
 			continue
 		}
+		accountsToVerify = append(accountsToVerify, struct {
+			Address common.Address
+			Account *types.Account
+		}{addr, &expectedAccount})
+	}
 
-		// Verify balance
-		expectedBalance := uint256.MustFromBig(expectedAccount.Balance)
-		actualBalance := statedb.GetBalance(addr)
-		if actualBalance.Cmp(expectedBalance) != 0 {
-			log.Error("Balance mismatch", "address", addr.Hex(),
-				"expected", expectedBalance, "actual", actualBalance)
-			errorCount++
+	log.Info("Starting concurrent verification", "total_accounts", len(accountsToVerify))
+
+	// Configuration for concurrent processing
+	numWorkers := runtime.NumCPU()
+	if numWorkers > len(accountsToVerify) {
+		numWorkers = len(accountsToVerify)
+	}
+	if numWorkers < 1 {
+		numWorkers = 1
+	}
+
+	log.Info("Using concurrent workers", "workers", numWorkers)
+
+	// Create channels for results
+	resultChan := make(chan AccountVerificationResult, len(accountsToVerify))
+
+	// Use WaitGroup to wait for all goroutines to complete
+	var wg sync.WaitGroup
+
+	// Process accounts in batches
+	accountsPerWorker := len(accountsToVerify) / numWorkers
+	if len(accountsToVerify)%numWorkers != 0 {
+		accountsPerWorker++
+	}
+
+	for i := 0; i < numWorkers; i++ {
+		startIdx := i * accountsPerWorker
+		endIdx := startIdx + accountsPerWorker
+		if endIdx > len(accountsToVerify) {
+			endIdx = len(accountsToVerify)
 		}
 
-		// Verify nonce
-		expectedNonce := expectedAccount.Nonce
-		actualNonce := statedb.GetNonce(addr)
-		if actualNonce != expectedNonce {
-			log.Error("Nonce mismatch", "address", addr.Hex(),
-				"expected", expectedNonce, "actual", actualNonce)
-			errorCount++
+		if startIdx >= len(accountsToVerify) {
+			break
 		}
 
-		// Verify code
-		expectedCode := expectedAccount.Code
-		actualCode := statedb.GetCode(addr)
-		if !bytes.Equal(actualCode, expectedCode) {
-			log.Error("Code mismatch", "address", addr.Hex(),
-				"expected", hexutil.Encode(expectedCode), "actual", hexutil.Encode(actualCode))
-			errorCount++
-		}
+		wg.Add(1)
+		go func(workerID int, accounts []struct {
+			Address common.Address
+			Account *types.Account
+		}) {
+			defer wg.Done()
 
-		// Verify storage
-		for key, expectedValue := range expectedAccount.Storage {
-			actualValue := statedb.GetState(addr, key)
-			if actualValue != expectedValue {
-				log.Error("Storage mismatch", "address", addr.Hex(), "key", key.Hex(),
-					"expected", expectedValue.Hex(), "actual", actualValue.Hex())
-				errorCount++
+			log.Info("Worker started", "worker", workerID, "accounts", len(accounts))
+
+			for _, accountInfo := range accounts {
+				verifyAccount(accountInfo.Address, accountInfo.Account, stateDB, genesisBlock.Root(), resultChan)
+			}
+
+			log.Info("Worker completed", "worker", workerID, "accounts_processed", len(accounts))
+		}(i, accountsToVerify[startIdx:endIdx])
+	}
+
+	// Close result channel when all workers are done
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	// Collect results
+	var verifiedCount int64
+	var errorCount int64
+	var ignoredCount int64
+
+	// Process results as they come in
+	for result := range resultChan {
+		atomic.AddInt64(&verifiedCount, 1)
+
+		if !result.Verified {
+			atomic.AddInt64(&errorCount, int64(len(result.Errors)))
+			for _, errMsg := range result.Errors {
+				log.Error("Account verification failed", "address", result.Address.Hex(), "error", errMsg)
 			}
 		}
 
-		//// TODO: below is to check there is no extra storage as compared to genesis.json
-		//// however, EVM will add extra storage for certain contacts, e.g proxy. do we need to verify this or ignore
-		//storageRoot := statedb.GetStorageRoot(addr)
-		//if storageRoot != types.EmptyRootHash {
-		//	// Get storage trie
-		//	storageTrie, err := stateDB.OpenStorageTrie(genesisBlock.Root(), addr, storageRoot, nil)
-		//	if err != nil {
-		//		log.Error("Failed to open storage trie", "address", addr.Hex(), "error", err)
-		//		errorCount++
-		//		continue
-		//	}
-		//
-		//	// Iterate through all storage slots in the trie
-		//	itStorage, err := storageTrie.NodeIterator(nil)
-		//	it := trie.NewIterator(itStorage)
-		//	for it.Next() {
-		//		key := common.BytesToHash(it.Key)
-		//		// Check if this key exists in the expected storage
-		//		if _, exists := expectedAccount.Storage[key]; !exists {
-		//			log.Error("Unexpected storage slot", "address", addr.Hex(), "key", key.Hex())
-		//			errorCount++
-		//		}
-		//	}
-		//}
-		//
-		verifiedCount++
+		// Progress reporting
 		if verifiedCount%1000 == 0 {
-			log.Info("Verified accounts", "count", verifiedCount)
+			log.Info("Verification progress", "verified", verifiedCount, "errors", errorCount)
 		}
 	}
 
 	// Summary
 	if errorCount == 0 {
-		log.Info("✅ Genesis verification successful", "accounts_verified", verifiedCount, "elapsed", common.PrettyDuration(time.Since(start)))
+		log.Info("✅ Genesis verification successful",
+			"accounts_verified", verifiedCount,
+			"accounts_ignored", ignoredCount,
+			"elapsed", common.PrettyDuration(time.Since(start)))
 	} else {
-		log.Error("❌ Genesis verification failed", "errors", errorCount, "accounts_verified", verifiedCount)
+		log.Error("❌ Genesis verification failed",
+			"errors", errorCount,
+			"accounts_verified", verifiedCount,
+			"accounts_ignored", ignoredCount)
 		return fmt.Errorf("verification failed with %d errors", errorCount)
 	}
+
 	return nil
 }
 
@@ -865,6 +950,5 @@ func verifyGenesis(ctx *cli.Context) error {
 		utils.Fatalf("invalid genesis file: %v", err)
 	}
 
-	return verifyGenesisInternal(ctx, genesis, ignoreAddresses)
-
+	return verifyGenesisInternal(ctx, *genesis, ignoreAddresses)
 }
