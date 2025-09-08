@@ -608,7 +608,6 @@ func SetupGenesisBlockWithOverride(db ethdb.Database, triedb *triedb.Database, g
 		if err != nil {
 			return nil, common.Hash{}, nil, err
 		}
-		fmt.Println("Writing genesis block took", time.Since(start))
 		log.Info("commit genesis", "elapsed", time.Since(start))
 		return genesis.Config, block.Hash(), nil, nil
 	}
@@ -910,7 +909,6 @@ func (g *Genesis) Commit(db ethdb.Database, triedb *triedb.Database) (*types.Blo
 	//rawdb.WriteGenesisStateSpec(batch, block.Hash(), blob)
 	rawdb.WriteBlock(batch, block)
 	rawdb.WriteReceipts(batch, block.Hash(), block.NumberU64(), nil)
-	fmt.Println("write canonical hash", "block number", block.NumberU64(), "block hash", block.Hash())
 	rawdb.WriteCanonicalHash(batch, block.Hash(), block.NumberU64())
 	rawdb.WriteHeadBlockHash(batch, block.Hash())
 	rawdb.WriteHeadFastBlockHash(batch, block.Hash())

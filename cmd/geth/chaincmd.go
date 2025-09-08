@@ -134,7 +134,7 @@ participating.
 
 It expects the genesis file as argument.
 
-If --verify-after-init is provided, the command will automatically verify
+If --no-verify is provided, the command will skip verify
 the genesis state after initialization. Use --ignore-addresses to specify
 addresses to skip during verification.`,
 	}
