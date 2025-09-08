@@ -807,7 +807,7 @@ func verifyGenesisInternal(ctx *cli.Context, genesis *core.Genesis, ignoreAddres
 		//}
 		//
 		verifiedCount++
-		if verifiedCount%100 == 0 {
+		if verifiedCount%1000 == 0 {
 			log.Info("Verified accounts", "count", verifiedCount)
 		}
 	}
@@ -849,6 +849,8 @@ func verifyGenesis(ctx *cli.Context) error {
 				}
 			}
 		}
+	} else {
+		log.Info("full verification", "path", genesisPath)
 	}
 
 	// Read and parse the genesis file
