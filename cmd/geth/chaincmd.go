@@ -304,7 +304,7 @@ helps reduce storage requirements for nodes that don't need full historical data
 // initGenesis will initialise the given JSON format genesis file and writes it as
 // the zero'd block (i.e. genesis) or will fail hard if it can't succeed.
 func initGenesis(ctx *cli.Context) error {
-	start0 := time.Now()
+	initStart := time.Now()
 	if ctx.Args().Len() != 1 {
 		utils.Fatalf("need genesis.json file as the only argument")
 	}
@@ -355,7 +355,7 @@ func initGenesis(ctx *cli.Context) error {
 	if compatErr != nil {
 		utils.Fatalf("Failed to write chain config: %v", compatErr)
 	}
-	log.Info("Successfully wrote genesis state", "database", "chaindata", "hash", hash, "elapsed", time.Since(start0))
+	log.Info("Successfully wrote genesis state", "database", "chaindata", "hash", hash, "elapsed", time.Since(initStart))
 
 	// Check if verification is requested
 	if !ctx.Bool("no-verify") {
@@ -386,38 +386,6 @@ func initGenesis(ctx *cli.Context) error {
 		}
 		log.Info("Genesis verification completed successfully", "elapsed", common.PrettyDuration(time.Since(verifyStart)))
 	}
-
-	// Check if verification is requested
-	if ctx.Bool("verify-after-init") {
-		log.Info("Starting genesis verification after initialization")
-
-		// Parse ignore addresses if provided
-		var ignoreAddresses map[common.Address]bool
-		if ctx.IsSet("ignore-addresses") {
-			ignoreList := ctx.String("ignore-addresses")
-			if ignoreList != "" {
-				ignoreAddresses = make(map[common.Address]bool)
-				addresses := strings.Split(ignoreList, ",")
-				for _, addrStr := range addresses {
-					addrStr = strings.TrimSpace(addrStr)
-					if addrStr != "" {
-						addr := common.HexToAddress(addrStr)
-						ignoreAddresses[addr] = true
-						log.Info("Ignoring address during verification", "address", addr.Hex())
-					}
-				}
-			}
-		}
-
-		// Perform verification
-		verifyStart := time.Now()
-		if err := verifyGenesisInternal(ctx, genesis, ignoreAddresses); err != nil {
-			log.Error("Genesis verification failed", "error", err)
-			return err
-		}
-		log.Info("Genesis verification completed successfully", "elapsed", common.PrettyDuration(time.Since(verifyStart)))
-	}
-
 	return nil
 }
 
