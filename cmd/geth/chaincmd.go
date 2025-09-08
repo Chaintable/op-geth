@@ -74,6 +74,7 @@ func verifyAccount(addr common.Address, expectedAccount *types.Account, stateDB 
 	}
 
 	// Verify balance
+	fmt.Printf("Verifying account %s..., balance: %s\n", addr.Hex(), expectedAccount.Balance.String())
 	expectedBalance := uint256.MustFromBig(expectedAccount.Balance)
 	actualBalance := statedb.GetBalance(addr)
 	if actualBalance.Cmp(expectedBalance) != 0 {
