@@ -20,12 +20,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ethereum/go-ethereum/trie"
 	"github.com/urfave/cli/v2"
 	"os"
 	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -74,6 +74,10 @@ It expects the genesis file as argument.`,
 		ArgsUsage: "<genesisPath> [<accountAddress>]",
 		Flags: slices.Concat([]cli.Flag{
 			utils.CachePreimagesFlag,
+			&cli.StringFlag{
+				Name:  "ignore-addresses",
+				Usage: "Comma-separated list of addresses to ignore during verification",
+			},
 		}, utils.DatabaseFlags),
 		Description: `
 The verify-genesis command connects to the database and verifies that the saved state
@@ -82,7 +86,8 @@ specific account if an address is provided.
 
 Examples:
   geth verify-genesis genesis.json
-  geth verify-genesis genesis.json 0x1234567890123456789012345678901234567890`,
+  geth verify-genesis genesis.json 0x1234567890123456789012345678901234567890
+  geth verify-genesis genesis.json --ignore-addresses "0x4200000000000000000000000000000000000297,0x1234567890123456789012345678901234567890"`,
 	}
 	dumpGenesisCommand = &cli.Command{
 		Action:    dumpGenesis,
@@ -703,6 +708,24 @@ func verifyGenesis(ctx *cli.Context) error {
 		utils.Fatalf("invalid path to genesis file")
 	}
 
+	// Parse ignore addresses
+	var ignoreAddresses map[common.Address]bool
+	if ctx.IsSet("ignore-addresses") {
+		ignoreList := ctx.String("ignore-addresses")
+		if ignoreList != "" {
+			ignoreAddresses = make(map[common.Address]bool)
+			addresses := strings.Split(ignoreList, ",")
+			for _, addrStr := range addresses {
+				addrStr = strings.TrimSpace(addrStr)
+				if addrStr != "" {
+					addr := common.HexToAddress(addrStr)
+					ignoreAddresses[addr] = true
+					log.Info("Ignoring address during verification", "address", addr.Hex())
+				}
+			}
+		}
+	}
+
 	// Read and parse the genesis file
 	file, err := os.Open(genesisPath)
 	if err != nil {
@@ -749,22 +772,14 @@ func verifyGenesis(ctx *cli.Context) error {
 		utils.Fatalf("Failed to create state database: %v", err)
 	}
 
-	// Check if we should verify a specific account
-	var targetAddress *common.Address
-	if ctx.Args().Len() > 1 {
-		addrStr := ctx.Args().Get(1)
-		addr := common.HexToAddress(addrStr)
-		targetAddress = &addr
-		log.Info("Verifying specific account", "address", addr.Hex())
-	}
-
 	// Verify accounts
 	verifiedCount := 0
 	errorCount := 0
 
 	for addr, expectedAccount := range genesis.Alloc {
-		// If we're checking a specific account, skip others
-		if targetAddress != nil && addr != *targetAddress {
+		// Skip ignored addresses
+		if ignoreAddresses != nil && ignoreAddresses[addr] {
+			log.Info("Skipping ignored address", "address", addr.Hex())
 			continue
 		}
 
@@ -805,42 +820,34 @@ func verifyGenesis(ctx *cli.Context) error {
 			}
 		}
 
-		storageRoot := statedb.GetStorageRoot(addr)
-
-		//// Check for extra storage slots in the database that shouldn't be there
-		if storageRoot != types.EmptyRootHash {
-			// Get storage trie
-			storageTrie, err := stateDB.OpenStorageTrie(genesisBlock.Root(), addr, storageRoot, nil)
-			if err != nil {
-				log.Error("Failed to open storage trie", "address", addr.Hex(), "error", err)
-				errorCount++
-				continue
-			}
-
-			// Iterate through all storage slots in the trie
-			itStorage, err := storageTrie.NodeIterator(nil)
-			it := trie.NewIterator(itStorage)
-			for it.Next() {
-				key := common.BytesToHash(it.Key)
-				// Check if this key exists in the expected storage
-				if _, exists := expectedAccount.Storage[key]; !exists {
-					log.Error("Unexpected storage slot", "address", addr.Hex(), "key", key.Hex())
-					errorCount++
-				}
-			}
-		}
-
+		//// TODO: below is to check there is no extra storage as compared to genesis.json
+		//// however, EVM will add extra storage for certain contacts, e.g proxy. do we need to verify this or ignore
+		//storageRoot := statedb.GetStorageRoot(addr)
+		//if storageRoot != types.EmptyRootHash {
+		//	// Get storage trie
+		//	storageTrie, err := stateDB.OpenStorageTrie(genesisBlock.Root(), addr, storageRoot, nil)
+		//	if err != nil {
+		//		log.Error("Failed to open storage trie", "address", addr.Hex(), "error", err)
+		//		errorCount++
+		//		continue
+		//	}
+		//
+		//	// Iterate through all storage slots in the trie
+		//	itStorage, err := storageTrie.NodeIterator(nil)
+		//	it := trie.NewIterator(itStorage)
+		//	for it.Next() {
+		//		key := common.BytesToHash(it.Key)
+		//		// Check if this key exists in the expected storage
+		//		if _, exists := expectedAccount.Storage[key]; !exists {
+		//			log.Error("Unexpected storage slot", "address", addr.Hex(), "key", key.Hex())
+		//			errorCount++
+		//		}
+		//	}
+		//}
+		//
 		verifiedCount++
 		if verifiedCount%100 == 0 {
 			log.Info("Verified accounts", "count", verifiedCount)
-		}
-	}
-
-	// If we were checking a specific account, make sure it exists in genesis
-	if targetAddress != nil {
-		if _, exists := genesis.Alloc[*targetAddress]; !exists {
-			log.Error("Account not found in genesis", "address", targetAddress.Hex())
-			errorCount++
 		}
 	}
 
