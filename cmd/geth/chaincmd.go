@@ -759,7 +759,7 @@ func pruneHistory(ctx *cli.Context) error {
 	return nil
 }
 
-func verifyGenesisInternal(ctx *cli.Context, genesis core.Genesis, ignoreAddresses map[common.Address]bool) error {
+func verifyGenesisInternal(ctx *cli.Context, genesis *core.Genesis, ignoreAddresses map[common.Address]bool) error {
 	start := time.Now()
 
 	// Open the database
@@ -945,5 +945,5 @@ func verifyGenesis(ctx *cli.Context) error {
 		utils.Fatalf("invalid genesis file: %v", err)
 	}
 
-	return verifyGenesisInternal(ctx, *genesis, ignoreAddresses)
+	return verifyGenesisInternal(ctx, genesis, ignoreAddresses)
 }

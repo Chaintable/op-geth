@@ -2,6 +2,5 @@
 ```azure
 ~/go/bin/geth --datadir=op_geth --gcmode=archive init --state.scheme=hash /Users/yangweitao/dev/okx/xlayer-erigon/test-pp-op/config-op/genesis.json
 ~/go/bin/geth --datadir=op_geth verify-genesis --ignore-addresses "0x000000000000000000000000000000005ca1ab1e" /Users/yangweitao/dev/okx/xlayer-erigon/test-pp-op/config-op/genesis.json 
-geth --datadir=/mnt/ramdisk_op/op_geth_data verify-genesis --ignore-addresses=0x000000000000000000000000000000005ca1ab1e /mnt/ramdisk_op/genesis.json 
-
+geth --datadir=/mnt/ramdisk_op/op_geth_data verify-genesis --ignore-addresses=0x000000000000000000000000000000005ca1ab1e /mnt/ramdisk_op/genesis.json
 ```
