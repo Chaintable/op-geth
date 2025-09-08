@@ -64,7 +64,6 @@ func verifyAccount(addr common.Address, expectedAccount types.Account, stateDB s
 		Verified: true,
 	}
 
-	// Create a new StateDB instance for this worker
 	statedb, err := state.New(genesisRoot, stateDB)
 	if err != nil {
 		result.Errors = append(result.Errors, fmt.Sprintf("Failed to create state database: %v", err))
@@ -74,7 +73,6 @@ func verifyAccount(addr common.Address, expectedAccount types.Account, stateDB s
 	}
 
 	// Verify balance
-	fmt.Printf("Verifying account %s..., balance: %s\n", addr.Hex(), expectedAccount.Balance.String())
 	expectedBalance := uint256.MustFromBig(expectedAccount.Balance)
 	actualBalance := statedb.GetBalance(addr)
 	if actualBalance.Cmp(expectedBalance) != 0 {
