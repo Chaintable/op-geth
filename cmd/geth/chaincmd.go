@@ -57,7 +57,7 @@ type AccountVerificationResult struct {
 }
 
 // verifyAccount verifies a single account against the expected state
-func verifyAccount(addr common.Address, expectedAccount *types.Account, stateDB state.Database, genesisRoot common.Hash, resultChan chan<- AccountVerificationResult) {
+func verifyAccount(addr common.Address, expectedAccount types.Account, stateDB state.Database, genesisRoot common.Hash, resultChan chan<- AccountVerificationResult) {
 	result := AccountVerificationResult{
 		Address:  addr,
 		Errors:   make([]string, 0),
@@ -793,20 +793,14 @@ func verifyGenesisInternal(ctx *cli.Context, genesis *core.Genesis, ignoreAddres
 	stateDB := state.NewDatabase(triedb, nil)
 
 	// Prepare accounts for verification
-	accountsToVerify := make([]struct {
-		Address common.Address
-		Account *types.Account
-	}, len(genesis.Alloc))
+	accountsToVerify := make([]common.Address, len(genesis.Alloc))
 
-	for addr, expectedAccount := range genesis.Alloc {
+	for addr, _ := range genesis.Alloc {
 		if ignoreAddresses != nil && ignoreAddresses[addr] {
 			log.Info("Skipping ignored address", "address", addr.Hex())
 			continue
 		}
-		accountsToVerify = append(accountsToVerify, struct {
-			Address common.Address
-			Account *types.Account
-		}{addr, &expectedAccount})
+		accountsToVerify = append(accountsToVerify, addr)
 	}
 
 	log.Info("Starting concurrent verification", "total_accounts", len(accountsToVerify))
@@ -841,16 +835,13 @@ func verifyGenesisInternal(ctx *cli.Context, genesis *core.Genesis, ignoreAddres
 		}
 
 		wg.Add(1)
-		go func(workerID int, accounts []struct {
-			Address common.Address
-			Account *types.Account
-		}) {
+		go func(workerID int, accounts []common.Address) {
 			defer wg.Done()
 
 			log.Info("Worker started", "worker", workerID, "accounts", len(accounts))
 
-			for _, accountInfo := range accounts {
-				verifyAccount(accountInfo.Address, accountInfo.Account, stateDB, genesisBlock.Root(), resultChan)
+			for _, addr := range accounts {
+				verifyAccount(addr, genesis.Alloc[addr], stateDB, genesisBlock.Root(), resultChan)
 			}
 
 			log.Info("Worker completed", "worker", workerID, "accounts_processed", len(accounts))
