@@ -803,7 +803,7 @@ func verifyGenesisInternal(ctx *cli.Context, genesis *core.Genesis, ignoreAddres
 
 	log.Info("Starting concurrent verification", "total_accounts", len(accountsToVerify))
 
-	numWorkers := runtime.NumCPU()
+	numWorkers := 1024 // runtime.NumCPU()
 	if numWorkers > len(accountsToVerify) {
 		numWorkers = len(accountsToVerify)
 	}
