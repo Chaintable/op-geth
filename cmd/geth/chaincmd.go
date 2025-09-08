@@ -379,6 +379,15 @@ func initGenesis(ctx *cli.Context) error {
 			}
 		}
 
+		if err := triedb.Close(); err != nil {
+			log.Warn("Failed to close trie database", "error", err)
+		}
+		if err := chaindb.Close(); err != nil {
+			log.Warn("Failed to close chain database", "error", err)
+		}
+		if err := stack.Close(); err != nil {
+			log.Warn("Failed to close node stack", "error", err)
+		}
 		verifyStart := time.Now()
 		if err := verifyGenesisInternal(ctx, genesis, ignoreAddresses); err != nil {
 			log.Error("Genesis verification failed", "error", err)
