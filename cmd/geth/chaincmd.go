@@ -17,9 +17,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/holiman/uint256"
 	"github.com/urfave/cli/v2"
 	"os"
 	"runtime"
@@ -29,7 +31,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"bytes"
 	"github.com/ethereum/go-ethereum/cmd/utils"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -45,7 +46,6 @@ import (
 	"github.com/ethereum/go-ethereum/internal/flags"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/holiman/uint256"
 )
 
 var (
@@ -697,47 +697,8 @@ func pruneHistory(ctx *cli.Context) error {
 	return nil
 }
 
-// verifyGenesis verifies that the saved state in the trie database is consistent
-// with the provided genesis.json file.
-func verifyGenesis(ctx *cli.Context) error {
-	if ctx.Args().Len() < 1 {
-		utils.Fatalf("need genesis.json file as the first argument")
-	}
-	genesisPath := ctx.Args().First()
-	if len(genesisPath) == 0 {
-		utils.Fatalf("invalid path to genesis file")
-	}
-
-	// Parse ignore addresses
-	var ignoreAddresses map[common.Address]bool
-	if ctx.IsSet("ignore-addresses") {
-		ignoreList := ctx.String("ignore-addresses")
-		if ignoreList != "" {
-			ignoreAddresses = make(map[common.Address]bool)
-			addresses := strings.Split(ignoreList, ",")
-			for _, addrStr := range addresses {
-				addrStr = strings.TrimSpace(addrStr)
-				if addrStr != "" {
-					addr := common.HexToAddress(addrStr)
-					ignoreAddresses[addr] = true
-					log.Info("Ignoring address during verification", "address", addr.Hex())
-				}
-			}
-		}
-	}
-
-	// Read and parse the genesis file
-	file, err := os.Open(genesisPath)
-	if err != nil {
-		utils.Fatalf("Failed to read genesis file: %v", err)
-	}
-	defer file.Close()
-
-	genesis := new(core.Genesis)
-	if err := json.NewDecoder(file).Decode(genesis); err != nil {
-		utils.Fatalf("invalid genesis file: %v", err)
-	}
-
+func verifyGenesisInternal(ctx *cli.Context, genesis *core.Genesis, ignoreAddresses map[common.Address]bool) error {
+	start := time.Now()
 	// Open the database
 	stack, _ := makeConfigNode(ctx)
 	defer stack.Close()
@@ -853,11 +814,55 @@ func verifyGenesis(ctx *cli.Context) error {
 
 	// Summary
 	if errorCount == 0 {
-		log.Info("✅ Genesis verification successful", "accounts_verified", verifiedCount)
+		log.Info("✅ Genesis verification successful", "accounts_verified", verifiedCount, "elapsed", common.PrettyDuration(time.Since(start)))
 	} else {
 		log.Error("❌ Genesis verification failed", "errors", errorCount, "accounts_verified", verifiedCount)
 		return fmt.Errorf("verification failed with %d errors", errorCount)
 	}
-
 	return nil
+}
+
+// verifyGenesis verifies that the saved state in the trie database is consistent
+// with the provided genesis.json file.
+func verifyGenesis(ctx *cli.Context) error {
+	if ctx.Args().Len() < 1 {
+		utils.Fatalf("need genesis.json file as the first argument")
+	}
+	genesisPath := ctx.Args().First()
+	if len(genesisPath) == 0 {
+		utils.Fatalf("invalid path to genesis file")
+	}
+
+	// Parse ignore addresses
+	var ignoreAddresses map[common.Address]bool
+	if ctx.IsSet("ignore-addresses") {
+		ignoreList := ctx.String("ignore-addresses")
+		if ignoreList != "" {
+			ignoreAddresses = make(map[common.Address]bool)
+			addresses := strings.Split(ignoreList, ",")
+			for _, addrStr := range addresses {
+				addrStr = strings.TrimSpace(addrStr)
+				if addrStr != "" {
+					addr := common.HexToAddress(addrStr)
+					ignoreAddresses[addr] = true
+					log.Info("Ignoring address during verification", "address", addr.Hex())
+				}
+			}
+		}
+	}
+
+	// Read and parse the genesis file
+	file, err := os.Open(genesisPath)
+	if err != nil {
+		utils.Fatalf("Failed to read genesis file: %v", err)
+	}
+	defer file.Close()
+
+	genesis := new(core.Genesis)
+	if err := json.NewDecoder(file).Decode(genesis); err != nil {
+		utils.Fatalf("invalid genesis file: %v", err)
+	}
+
+	return verifyGenesisInternal(ctx, genesis, ignoreAddresses)
+
 }
