@@ -20,6 +20,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ethereum/go-ethereum/trie"
+	"github.com/urfave/cli/v2"
 	"os"
 	"runtime"
 	"slices"
@@ -27,6 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"bytes"
 	"github.com/ethereum/go-ethereum/cmd/utils"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -42,7 +45,7 @@ import (
 	"github.com/ethereum/go-ethereum/internal/flags"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/urfave/cli/v2"
+	"github.com/holiman/uint256"
 )
 
 var (
@@ -62,6 +65,24 @@ This is a destructive action and changes the network in which you will be
 participating.
 
 It expects the genesis file as argument.`,
+	}
+
+	verifyGenesisCommand = &cli.Command{
+		Action:    verifyGenesis,
+		Name:      "verify-genesis",
+		Usage:     "Verify that the saved state in trie database is consistent with genesis.json",
+		ArgsUsage: "<genesisPath> [<accountAddress>]",
+		Flags: slices.Concat([]cli.Flag{
+			utils.CachePreimagesFlag,
+		}, utils.DatabaseFlags),
+		Description: `
+The verify-genesis command connects to the database and verifies that the saved state
+is consistent with the provided genesis.json file. It can verify all accounts or a
+specific account if an address is provided.
+
+Examples:
+  geth verify-genesis genesis.json
+  geth verify-genesis genesis.json 0x1234567890123456789012345678901234567890`,
 	}
 	dumpGenesisCommand = &cli.Command{
 		Action:    dumpGenesis,
@@ -207,6 +228,7 @@ helps reduce storage requirements for nodes that don't need full historical data
 // the zero'd block (i.e. genesis) or will fail hard if it can't succeed.
 func initGenesis(ctx *cli.Context) error {
 	start0 := time.Now()
+	fmt.Println("Initializing genesis block >>>>>>>>")
 	if ctx.Args().Len() != 1 {
 		utils.Fatalf("need genesis.json file as the only argument")
 	}
@@ -666,6 +688,169 @@ func pruneHistory(ctx *cli.Context) error {
 	log.Info("History pruning completed", "tail", mergeBlock, "elapsed", common.PrettyDuration(time.Since(start)))
 
 	// TODO(s1na): what if there is a crash between the two prune operations?
+
+	return nil
+}
+
+// verifyGenesis verifies that the saved state in the trie database is consistent
+// with the provided genesis.json file.
+func verifyGenesis(ctx *cli.Context) error {
+	if ctx.Args().Len() < 1 {
+		utils.Fatalf("need genesis.json file as the first argument")
+	}
+	genesisPath := ctx.Args().First()
+	if len(genesisPath) == 0 {
+		utils.Fatalf("invalid path to genesis file")
+	}
+
+	// Read and parse the genesis file
+	file, err := os.Open(genesisPath)
+	if err != nil {
+		utils.Fatalf("Failed to read genesis file: %v", err)
+	}
+	defer file.Close()
+
+	genesis := new(core.Genesis)
+	if err := json.NewDecoder(file).Decode(genesis); err != nil {
+		utils.Fatalf("invalid genesis file: %v", err)
+	}
+
+	// Open the database
+	stack, _ := makeConfigNode(ctx)
+	defer stack.Close()
+
+	chaindb, err := stack.OpenDatabaseWithFreezer("chaindata", 0, 0, ctx.String(utils.AncientFlag.Name), "", false)
+	if err != nil {
+		utils.Fatalf("Failed to open database: %v", err)
+	}
+	defer chaindb.Close()
+
+	// Get the genesis block from the database
+	genesisHash := rawdb.ReadCanonicalHash(chaindb, genesis.Number)
+	if genesisHash == (common.Hash{}) {
+		utils.Fatalf("No genesis block found in database")
+	}
+
+	genesisBlock := rawdb.ReadBlock(chaindb, genesisHash, genesis.Number)
+	if genesisBlock == nil {
+		utils.Fatalf("Failed to read genesis block from database")
+	}
+
+	log.Info("Found genesis block", "hash", genesisHash, "stateRoot", genesisBlock.Root())
+
+	// Create trie database
+	triedb := utils.MakeTrieDatabase(ctx, chaindb, ctx.Bool(utils.CachePreimagesFlag.Name), true, genesis.IsVerkle())
+	defer triedb.Close()
+
+	// Create state database
+	stateDB := state.NewDatabase(triedb, nil)
+	statedb, err := state.New(genesisBlock.Root(), stateDB)
+	if err != nil {
+		utils.Fatalf("Failed to create state database: %v", err)
+	}
+
+	// Check if we should verify a specific account
+	var targetAddress *common.Address
+	if ctx.Args().Len() > 1 {
+		addrStr := ctx.Args().Get(1)
+		addr := common.HexToAddress(addrStr)
+		targetAddress = &addr
+		log.Info("Verifying specific account", "address", addr.Hex())
+	}
+
+	// Verify accounts
+	verifiedCount := 0
+	errorCount := 0
+
+	for addr, expectedAccount := range genesis.Alloc {
+		// If we're checking a specific account, skip others
+		if targetAddress != nil && addr != *targetAddress {
+			continue
+		}
+
+		// Verify balance
+		expectedBalance := uint256.MustFromBig(expectedAccount.Balance)
+		actualBalance := statedb.GetBalance(addr)
+		if actualBalance.Cmp(expectedBalance) != 0 {
+			log.Error("Balance mismatch", "address", addr.Hex(),
+				"expected", expectedBalance, "actual", actualBalance)
+			errorCount++
+		}
+
+		// Verify nonce
+		expectedNonce := expectedAccount.Nonce
+		actualNonce := statedb.GetNonce(addr)
+		if actualNonce != expectedNonce {
+			log.Error("Nonce mismatch", "address", addr.Hex(),
+				"expected", expectedNonce, "actual", actualNonce)
+			errorCount++
+		}
+
+		// Verify code
+		expectedCode := expectedAccount.Code
+		actualCode := statedb.GetCode(addr)
+		if !bytes.Equal(actualCode, expectedCode) {
+			log.Error("Code mismatch", "address", addr.Hex(),
+				"expected", hexutil.Encode(expectedCode), "actual", hexutil.Encode(actualCode))
+			errorCount++
+		}
+
+		// Verify storage
+		for key, expectedValue := range expectedAccount.Storage {
+			actualValue := statedb.GetState(addr, key)
+			if actualValue != expectedValue {
+				log.Error("Storage mismatch", "address", addr.Hex(), "key", key.Hex(),
+					"expected", expectedValue.Hex(), "actual", actualValue.Hex())
+				errorCount++
+			}
+		}
+
+		storageRoot := statedb.GetStorageRoot(addr)
+
+		//// Check for extra storage slots in the database that shouldn't be there
+		if storageRoot != types.EmptyRootHash {
+			// Get storage trie
+			storageTrie, err := stateDB.OpenStorageTrie(genesisBlock.Root(), addr, storageRoot, nil)
+			if err != nil {
+				log.Error("Failed to open storage trie", "address", addr.Hex(), "error", err)
+				errorCount++
+				continue
+			}
+
+			// Iterate through all storage slots in the trie
+			itStorage, err := storageTrie.NodeIterator(nil)
+			it := trie.NewIterator(itStorage)
+			for it.Next() {
+				key := common.BytesToHash(it.Key)
+				// Check if this key exists in the expected storage
+				if _, exists := expectedAccount.Storage[key]; !exists {
+					log.Error("Unexpected storage slot", "address", addr.Hex(), "key", key.Hex())
+					errorCount++
+				}
+			}
+		}
+
+		verifiedCount++
+		if verifiedCount%100 == 0 {
+			log.Info("Verified accounts", "count", verifiedCount)
+		}
+	}
+
+	// If we were checking a specific account, make sure it exists in genesis
+	if targetAddress != nil {
+		if _, exists := genesis.Alloc[*targetAddress]; !exists {
+			log.Error("Account not found in genesis", "address", targetAddress.Hex())
+			errorCount++
+		}
+	}
+
+	// Summary
+	if errorCount == 0 {
+		log.Info("✅ Genesis verification successful", "accounts_verified", verifiedCount)
+	} else {
+		log.Error("❌ Genesis verification failed", "errors", errorCount, "accounts_verified", verifiedCount)
+		return fmt.Errorf("verification failed with %d errors", errorCount)
+	}
 
 	return nil
 }
