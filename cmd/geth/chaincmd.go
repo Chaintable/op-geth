@@ -118,13 +118,25 @@ var (
 			utils.CachePreimagesFlag,
 			utils.OverridePrague,
 			utils.OverrideVerkle,
+			&cli.BoolFlag{
+				Name:  "no-verify",
+				Usage: "do not perform verification",
+			},
+			&cli.StringFlag{
+				Name:  "ignore-addresses",
+				Usage: "Comma-separated list of addresses to ignore during verification",
+			},
 		}, utils.DatabaseFlags),
 		Description: `
 The init command initializes a new genesis block and definition for the network.
 This is a destructive action and changes the network in which you will be
 participating.
 
-It expects the genesis file as argument.`,
+It expects the genesis file as argument.
+
+If --verify-after-init is provided, the command will automatically verify
+the genesis state after initialization. Use --ignore-addresses to specify
+addresses to skip during verification.`,
 	}
 
 	verifyGenesisCommand = &cli.Command{
@@ -293,7 +305,6 @@ helps reduce storage requirements for nodes that don't need full historical data
 // the zero'd block (i.e. genesis) or will fail hard if it can't succeed.
 func initGenesis(ctx *cli.Context) error {
 	start0 := time.Now()
-	fmt.Println("Initializing genesis block >>>>>>>>")
 	if ctx.Args().Len() != 1 {
 		utils.Fatalf("need genesis.json file as the only argument")
 	}
@@ -345,6 +356,67 @@ func initGenesis(ctx *cli.Context) error {
 		utils.Fatalf("Failed to write chain config: %v", compatErr)
 	}
 	log.Info("Successfully wrote genesis state", "database", "chaindata", "hash", hash, "elapsed", time.Since(start0))
+
+	// Check if verification is requested
+	if !ctx.Bool("no-verify") {
+		log.Info("Starting genesis verification after initialization")
+
+		// Parse ignore addresses if provided
+		var ignoreAddresses map[common.Address]bool
+		if ctx.IsSet("ignore-addresses") {
+			ignoreList := ctx.String("ignore-addresses")
+			if ignoreList != "" {
+				ignoreAddresses = make(map[common.Address]bool)
+				addresses := strings.Split(ignoreList, ",")
+				for _, addrStr := range addresses {
+					addrStr = strings.TrimSpace(addrStr)
+					if addrStr != "" {
+						addr := common.HexToAddress(addrStr)
+						ignoreAddresses[addr] = true
+						log.Info("Ignoring address during verification", "address", addr.Hex())
+					}
+				}
+			}
+		}
+
+		verifyStart := time.Now()
+		if err := verifyGenesisInternal(ctx, genesis, ignoreAddresses); err != nil {
+			log.Error("Genesis verification failed", "error", err)
+			return err
+		}
+		log.Info("Genesis verification completed successfully", "elapsed", common.PrettyDuration(time.Since(verifyStart)))
+	}
+
+	// Check if verification is requested
+	if ctx.Bool("verify-after-init") {
+		log.Info("Starting genesis verification after initialization")
+
+		// Parse ignore addresses if provided
+		var ignoreAddresses map[common.Address]bool
+		if ctx.IsSet("ignore-addresses") {
+			ignoreList := ctx.String("ignore-addresses")
+			if ignoreList != "" {
+				ignoreAddresses = make(map[common.Address]bool)
+				addresses := strings.Split(ignoreList, ",")
+				for _, addrStr := range addresses {
+					addrStr = strings.TrimSpace(addrStr)
+					if addrStr != "" {
+						addr := common.HexToAddress(addrStr)
+						ignoreAddresses[addr] = true
+						log.Info("Ignoring address during verification", "address", addr.Hex())
+					}
+				}
+			}
+		}
+
+		// Perform verification
+		verifyStart := time.Now()
+		if err := verifyGenesisInternal(ctx, genesis, ignoreAddresses); err != nil {
+			log.Error("Genesis verification failed", "error", err)
+			return err
+		}
+		log.Info("Genesis verification completed successfully", "elapsed", common.PrettyDuration(time.Since(verifyStart)))
+	}
 
 	return nil
 }
@@ -803,7 +875,7 @@ func verifyGenesisInternal(ctx *cli.Context, genesis *core.Genesis, ignoreAddres
 
 	log.Info("Starting concurrent verification", "total_accounts", len(accountsToVerify))
 
-	numWorkers := 1024 // runtime.NumCPU()
+	numWorkers := runtime.NumCPU()
 	if numWorkers > len(accountsToVerify) {
 		numWorkers = len(accountsToVerify)
 	}
