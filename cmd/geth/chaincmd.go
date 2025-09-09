@@ -17,13 +17,18 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/holiman/uint256"
+	"github.com/urfave/cli/v2"
 	"os"
 	"runtime"
 	"slices"
 	"strconv"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -42,8 +47,66 @@ import (
 	"github.com/ethereum/go-ethereum/internal/flags"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/urfave/cli/v2"
 )
+
+// AccountVerificationResult holds the result of verifying a single account
+type AccountVerificationResult struct {
+	Address  common.Address
+	Errors   []string
+	Verified bool
+}
+
+// verifyAccount verifies a single account against the expected state
+func verifyAccount(addr common.Address, expectedAccount types.Account, stateDB state.Database, genesisRoot common.Hash, resultChan chan<- AccountVerificationResult) {
+	result := AccountVerificationResult{
+		Address:  addr,
+		Errors:   make([]string, 0),
+		Verified: true,
+	}
+
+	statedb, err := state.New(genesisRoot, stateDB)
+	if err != nil {
+		result.Errors = append(result.Errors, fmt.Sprintf("Failed to create state database: %v", err))
+		result.Verified = false
+		resultChan <- result
+		return
+	}
+
+	// Verify balance
+	expectedBalance := uint256.MustFromBig(expectedAccount.Balance)
+	actualBalance := statedb.GetBalance(addr)
+	if actualBalance.Cmp(expectedBalance) != 0 {
+		result.Errors = append(result.Errors, fmt.Sprintf("Balance mismatch: expected %v, actual %v", expectedBalance, actualBalance))
+		result.Verified = false
+	}
+
+	// Verify nonce
+	expectedNonce := expectedAccount.Nonce
+	actualNonce := statedb.GetNonce(addr)
+	if actualNonce != expectedNonce {
+		result.Errors = append(result.Errors, fmt.Sprintf("Nonce mismatch: expected %v, actual %v", expectedNonce, actualNonce))
+		result.Verified = false
+	}
+
+	// Verify code
+	expectedCode := expectedAccount.Code
+	actualCode := statedb.GetCode(addr)
+	if !bytes.Equal(actualCode, expectedCode) {
+		result.Errors = append(result.Errors, fmt.Sprintf("Code mismatch: expected %v, actual %v", hexutil.Encode(expectedCode), hexutil.Encode(actualCode)))
+		result.Verified = false
+	}
+
+	// Verify storage
+	for key, expectedValue := range expectedAccount.Storage {
+		actualValue := statedb.GetState(addr, key)
+		if actualValue != expectedValue {
+			result.Errors = append(result.Errors, fmt.Sprintf("Storage mismatch at key %v: expected %v, actual %v", key.Hex(), expectedValue.Hex(), actualValue.Hex()))
+			result.Verified = false
+		}
+	}
+
+	resultChan <- result
+}
 
 var (
 	initCommand = &cli.Command{
@@ -55,13 +118,48 @@ var (
 			utils.CachePreimagesFlag,
 			utils.OverridePrague,
 			utils.OverrideVerkle,
+			&cli.BoolFlag{
+				Name:  "no-verify",
+				Usage: "do not perform verification",
+			},
+			&cli.StringFlag{
+				Name:  "ignore-addresses",
+				Usage: "Comma-separated list of addresses to ignore during verification",
+			},
 		}, utils.DatabaseFlags),
 		Description: `
 The init command initializes a new genesis block and definition for the network.
 This is a destructive action and changes the network in which you will be
 participating.
 
-It expects the genesis file as argument.`,
+It expects the genesis file as argument.
+
+If --no-verify is provided, the command will skip verify
+the genesis state after initialization. Use --ignore-addresses to specify
+addresses to skip during verification.`,
+	}
+
+	verifyGenesisCommand = &cli.Command{
+		Action:    verifyGenesis,
+		Name:      "verify-genesis",
+		Usage:     "Verify that the saved state in trie database is consistent with genesis.json",
+		ArgsUsage: "<genesisPath> [<accountAddress>]",
+		Flags: slices.Concat([]cli.Flag{
+			utils.CachePreimagesFlag,
+			&cli.StringFlag{
+				Name:  "ignore-addresses",
+				Usage: "Comma-separated list of addresses to ignore during verification",
+			},
+		}, utils.DatabaseFlags),
+		Description: `
+The verify-genesis command connects to the database and verifies that the saved state
+is consistent with the provided genesis.json file. It can verify all accounts or a
+specific account if an address is provided.
+
+Examples:
+  geth verify-genesis genesis.json
+  geth verify-genesis genesis.json 0x1234567890123456789012345678901234567890
+  geth verify-genesis genesis.json --ignore-addresses "0x4200000000000000000000000000000000000297,0x1234567890123456789012345678901234567890"`,
 	}
 	dumpGenesisCommand = &cli.Command{
 		Action:    dumpGenesis,
@@ -206,7 +304,7 @@ helps reduce storage requirements for nodes that don't need full historical data
 // initGenesis will initialise the given JSON format genesis file and writes it as
 // the zero'd block (i.e. genesis) or will fail hard if it can't succeed.
 func initGenesis(ctx *cli.Context) error {
-	start0 := time.Now()
+	initStart := time.Now()
 	if ctx.Args().Len() != 1 {
 		utils.Fatalf("need genesis.json file as the only argument")
 	}
@@ -257,8 +355,46 @@ func initGenesis(ctx *cli.Context) error {
 	if compatErr != nil {
 		utils.Fatalf("Failed to write chain config: %v", compatErr)
 	}
-	log.Info("Successfully wrote genesis state", "database", "chaindata", "hash", hash, "elapsed", time.Since(start0))
+	log.Info("Successfully wrote genesis state", "database", "chaindata", "hash", hash, "elapsed", time.Since(initStart))
 
+	// Check if verification is requested
+	if !ctx.Bool("no-verify") {
+		log.Info("Starting genesis verification after initialization")
+
+		// Parse ignore addresses if provided
+		var ignoreAddresses map[common.Address]bool
+		if ctx.IsSet("ignore-addresses") {
+			ignoreList := ctx.String("ignore-addresses")
+			if ignoreList != "" {
+				ignoreAddresses = make(map[common.Address]bool)
+				addresses := strings.Split(ignoreList, ",")
+				for _, addrStr := range addresses {
+					addrStr = strings.TrimSpace(addrStr)
+					if addrStr != "" {
+						addr := common.HexToAddress(addrStr)
+						ignoreAddresses[addr] = true
+						log.Info("Ignoring address during verification", "address", addr.Hex())
+					}
+				}
+			}
+		}
+
+		if err := triedb.Close(); err != nil {
+			log.Warn("Failed to close trie database", "error", err)
+		}
+		if err := chaindb.Close(); err != nil {
+			log.Warn("Failed to close chain database", "error", err)
+		}
+		if err := stack.Close(); err != nil {
+			log.Warn("Failed to close node stack", "error", err)
+		}
+		verifyStart := time.Now()
+		if err := verifyGenesisInternal(ctx, genesis, ignoreAddresses); err != nil {
+			log.Error("Genesis verification failed", "error", err)
+			return err
+		}
+		log.Info("Genesis verification completed successfully", "elapsed", common.PrettyDuration(time.Since(verifyStart)))
+	}
 	return nil
 }
 
@@ -668,4 +804,184 @@ func pruneHistory(ctx *cli.Context) error {
 	// TODO(s1na): what if there is a crash between the two prune operations?
 
 	return nil
+}
+
+func verifyGenesisInternal(ctx *cli.Context, genesis *core.Genesis, ignoreAddresses map[common.Address]bool) error {
+	start := time.Now()
+
+	// Open the database
+	stack, _ := makeConfigNode(ctx)
+	defer stack.Close()
+
+	chaindb, err := stack.OpenDatabaseWithFreezer("chaindata", 512, 1024, ctx.String(utils.AncientFlag.Name), "", true)
+	if err != nil {
+		utils.Fatalf("Failed to open database: %v", err)
+	}
+	defer chaindb.Close()
+
+	// Get the genesis block from the database
+	genesisHash := rawdb.ReadCanonicalHash(chaindb, genesis.Number)
+	if genesisHash == (common.Hash{}) {
+		utils.Fatalf("No genesis block found in database")
+	}
+
+	genesisBlock := rawdb.ReadBlock(chaindb, genesisHash, genesis.Number)
+	if genesisBlock == nil {
+		utils.Fatalf("Failed to read genesis block from database")
+	}
+
+	log.Info("Found genesis block", "hash", genesisHash, "stateRoot", genesisBlock.Root())
+
+	// Create trie database
+	triedb := utils.MakeTrieDatabase(ctx, chaindb, ctx.Bool(utils.CachePreimagesFlag.Name), true, genesis.IsVerkle())
+	defer triedb.Close()
+
+	// Create state database (shared across workers)
+	stateDB := state.NewDatabase(triedb, nil)
+
+	// Prepare accounts for verification
+	accountsToVerify := make([]common.Address, len(genesis.Alloc))
+
+	for addr, _ := range genesis.Alloc {
+		if ignoreAddresses != nil && ignoreAddresses[addr] {
+			log.Info("Skipping ignored address", "address", addr.Hex())
+			continue
+		}
+		accountsToVerify = append(accountsToVerify, addr)
+	}
+
+	log.Info("Starting concurrent verification", "total_accounts", len(accountsToVerify))
+
+	numWorkers := runtime.NumCPU()
+	if numWorkers > len(accountsToVerify) {
+		numWorkers = len(accountsToVerify)
+	}
+	if numWorkers < 1 {
+		numWorkers = 1
+	}
+
+	log.Info("Using concurrent workers", "workers", numWorkers)
+
+	resultChan := make(chan AccountVerificationResult, len(accountsToVerify))
+	var wg sync.WaitGroup
+
+	accountsPerWorker := len(accountsToVerify) / numWorkers
+	if len(accountsToVerify)%numWorkers != 0 {
+		accountsPerWorker++
+	}
+
+	for i := 0; i < numWorkers; i++ {
+		startIdx := i * accountsPerWorker
+		endIdx := startIdx + accountsPerWorker
+		if endIdx > len(accountsToVerify) {
+			endIdx = len(accountsToVerify)
+		}
+
+		if startIdx >= len(accountsToVerify) {
+			break
+		}
+
+		wg.Add(1)
+		go func(workerID int, accounts []common.Address) {
+			defer wg.Done()
+
+			log.Info("Worker started", "worker", workerID, "accounts", len(accounts))
+
+			for _, addr := range accounts {
+				verifyAccount(addr, genesis.Alloc[addr], stateDB, genesisBlock.Root(), resultChan)
+			}
+
+			log.Info("Worker completed", "worker", workerID, "accounts_processed", len(accounts))
+		}(i, accountsToVerify[startIdx:endIdx])
+	}
+
+	// Close result channel when all workers are done
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	// Collect results
+	var verifiedCount int64
+	var errorCount int64
+	var ignoredCount int64
+
+	// Process results as they come in
+	for result := range resultChan {
+		atomic.AddInt64(&verifiedCount, 1)
+
+		if !result.Verified {
+			atomic.AddInt64(&errorCount, int64(len(result.Errors)))
+			for _, errMsg := range result.Errors {
+				log.Error("Account verification failed", "address", result.Address.Hex(), "error", errMsg)
+			}
+		}
+
+		// Progress reporting
+		if verifiedCount%1000 == 0 {
+			log.Info("Verification progress", "verified", verifiedCount, "errors", errorCount)
+		}
+	}
+
+	// Summary
+	if errorCount == 0 {
+		log.Info("✅ Genesis verification successful",
+			"accounts_verified", verifiedCount,
+			"accounts_ignored", ignoredCount,
+			"elapsed", common.PrettyDuration(time.Since(start)))
+	} else {
+		log.Error("❌ Genesis verification failed",
+			"errors", errorCount,
+			"accounts_verified", verifiedCount,
+			"accounts_ignored", ignoredCount)
+		return fmt.Errorf("verification failed with %d errors", errorCount)
+	}
+
+	return nil
+}
+
+// verifyGenesis verifies that the saved state in the trie database is consistent
+// with the provided genesis.json file.
+func verifyGenesis(ctx *cli.Context) error {
+	if ctx.Args().Len() < 1 {
+		utils.Fatalf("need genesis.json file as the first argument")
+	}
+	genesisPath := ctx.Args().First()
+	if len(genesisPath) == 0 {
+		utils.Fatalf("invalid path to genesis file")
+	}
+
+	// Parse ignore addresses
+	var ignoreAddresses map[common.Address]bool
+	if ctx.IsSet("ignore-addresses") {
+		ignoreList := ctx.String("ignore-addresses")
+		if ignoreList != "" {
+			ignoreAddresses = make(map[common.Address]bool)
+			addresses := strings.Split(ignoreList, ",")
+			for _, addrStr := range addresses {
+				addrStr = strings.TrimSpace(addrStr)
+				if addrStr != "" {
+					addr := common.HexToAddress(addrStr)
+					ignoreAddresses[addr] = true
+					log.Info("Ignoring address during verification", "address", addr.Hex())
+				}
+			}
+		}
+	} else {
+		log.Info("full verification", "path", genesisPath)
+	}
+
+	// Read and parse the genesis file
+	file, err := os.Open(genesisPath)
+	if err != nil {
+		utils.Fatalf("Failed to read genesis file: %v", err)
+	}
+	defer file.Close()
+
+	genesis := new(core.Genesis)
+	if err := json.NewDecoder(file).Decode(genesis); err != nil {
+		utils.Fatalf("invalid genesis file: %v", err)
+	}
+
+	return verifyGenesisInternal(ctx, genesis, ignoreAddresses)
 }
