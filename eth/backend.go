@@ -254,9 +254,13 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 				// For X Layer
 				EnableInnerTxs: config.EnableInnerTx,
 			},
+			// Enables file journaling for the trie database. The journal files will be stored
+			// within the data directory. The corresponding paths will be either:
+			// - DATADIR/triedb/merkle.journal
+			// - DATADIR/triedb/verkle.journal
+			TrieJournalDirectory: stack.ResolvePath("triedb"),
 		}
 	)
-
 	if config.VMTrace != "" {
 		traceConfig := json.RawMessage("{}")
 		if config.VMTraceJsonConfig != "" {
