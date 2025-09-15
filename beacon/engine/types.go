@@ -146,6 +146,11 @@ type BlobAndProofV1 struct {
 	Proof hexutil.Bytes `json:"proof"`
 }
 
+type BlobAndProofV2 struct {
+	Blob       hexutil.Bytes   `json:"blob"`
+	CellProofs []hexutil.Bytes `json:"proofs"`
+}
+
 // JSON type overrides for ExecutionPayloadEnvelope.
 type executionPayloadEnvelopeMarshaling struct {
 	BlockValue *hexutil.Big
@@ -359,8 +364,13 @@ func BlockToExecutableData(block *types.Block, fees *big.Int, sidecars []*types.
 		BlobGasUsed:      block.BlobGasUsed(),
 		ExcessBlobGas:    block.ExcessBlobGas(),
 		ExecutionWitness: block.ExecutionWitness(),
-		// OP-Stack addition: withdrawals list alone does not express the withdrawals storage-root.
-		WithdrawalsRoot: block.WithdrawalsRoot(),
+	}
+
+	// OP-Stack: only Isthmus execution payloads must set the withdrawals root.
+	// They are guaranteed to not be the empty withdrawals hash, which is set pre-Isthmus (post-Canyon).
+	if wr := block.WithdrawalsRoot(); wr != nil && *wr != types.EmptyWithdrawalsHash {
+		wr := *wr
+		data.WithdrawalsRoot = &wr
 	}
 
 	// Add blobs.
@@ -373,7 +383,9 @@ func BlockToExecutableData(block *types.Block, fees *big.Int, sidecars []*types.
 		for j := range sidecar.Blobs {
 			bundle.Blobs = append(bundle.Blobs, hexutil.Bytes(sidecar.Blobs[j][:]))
 			bundle.Commitments = append(bundle.Commitments, hexutil.Bytes(sidecar.Commitments[j][:]))
-			bundle.Proofs = append(bundle.Proofs, hexutil.Bytes(sidecar.Proofs[j][:]))
+		}
+		for _, proof := range sidecar.Proofs {
+			bundle.Proofs = append(bundle.Proofs, hexutil.Bytes(proof[:]))
 		}
 	}
 
