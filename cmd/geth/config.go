@@ -38,6 +38,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/eth/catalyst"
 	"github.com/ethereum/go-ethereum/eth/ethconfig"
+	"github.com/ethereum/go-ethereum/eth/filters"
 	"github.com/ethereum/go-ethereum/internal/flags"
 	"github.com/ethereum/go-ethereum/internal/monitor"
 	"github.com/ethereum/go-ethereum/internal/version"
@@ -261,7 +262,13 @@ func makeFullNode(ctx *cli.Context) *node.Node {
 	}
 
 	// Configure log filter RPC API.
-	filterSystem := utils.RegisterFilterAPI(stack, backend, &cfg.Eth)
+	isMigrationConfigured := cfg.Eth.XLayer.LegacyPp.MigrationBlock != nil && cfg.Eth.XLayer.LegacyPp.PPRPCUrl != ""
+	var filterSystem *filters.FilterSystem
+	if isMigrationConfigured {
+		filterSystem = utils.RegisterMigrationFilterAPI(stack, backend, &cfg.Eth)
+	} else {
+		filterSystem = utils.RegisterFilterAPI(stack, backend, &cfg.Eth)
+	}
 
 	// Configure GraphQL if requested.
 	if ctx.IsSet(utils.GraphQLEnabledFlag.Name) {
