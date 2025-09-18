@@ -26,8 +26,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ethereum/go-ethereum/eth/filters"
-
 	"github.com/holiman/uint256"
 
 	"github.com/ethereum/go-ethereum/accounts"
@@ -457,19 +455,9 @@ func (s *Ethereum) APIs() []rpc.API {
 	// Append any APIs exposed explicitly by the consensus engine
 	apis = append(apis, s.engine.APIs(s.BlockChain())...)
 
-	// Wrap APIs with migration routing if configured
+	// Xlayer: Wrap APIs with migration routing if configured
 	if s.xlayerLegacyRPCService != nil {
-		apis = WrapAPIsForMigration(apis, s.xlayerLegacyRPCService)
-		// Register filter here
-		filterSystem := filters.NewFilterSystem(s.APIBackend, filters.Config{
-			LogCacheSize: s.config.FilterLogCacheSize,
-		})
-		originalFilterApi := filters.NewFilterAPI(filterSystem)
-		filterApi := rpc.API{
-			Namespace: "eth",
-			Service:   NewMigrationFilterAPI(originalFilterApi, s.xlayerLegacyRPCService),
-		}
-		apis = append(apis, filterApi)
+		apis = WrapAPIsForXlayer(apis, s.xlayerLegacyRPCService)
 	}
 
 	// Append any Sequencer APIs as enabled
