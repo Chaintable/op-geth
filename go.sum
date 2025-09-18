@@ -12,14 +12,8 @@ github.com/AzureAD/microsoft-authentication-library-for-go v1.0.0 h1:OBhqkivkhkM
 github.com/AzureAD/microsoft-authentication-library-for-go v1.0.0/go.mod h1:kgDmCTgBzIEPFElEF+FK0SdjAor06dRq2Go927dnQ6o=
 github.com/BurntSushi/toml v1.4.0 h1:kuoIxZQy2WRRk1pttg9asf+WVv6tWQuBNVmK8+nqPr0=
 github.com/BurntSushi/toml v1.4.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
-github.com/Chaintable/pipeline v0.0.56-0.20250827065726-b3fc45e62412 h1:CUIwzESHaXhbHn8tC5O+QHjY5isjwVN7n6MAk5kUNdg=
-github.com/Chaintable/pipeline v0.0.56-0.20250827065726-b3fc45e62412/go.mod h1:l0GT8LwhbRwaxrLze5FjDv3lHgxxqdf9opAVjJtXNh4=
-github.com/Chaintable/pipeline v0.0.56-0.20250828124110-45166f006ea8 h1:L5zBQZLAD5TqnjuMwJddjzDbWn8NkPJ4ipXiVltp+oI=
-github.com/Chaintable/pipeline v0.0.56-0.20250828124110-45166f006ea8/go.mod h1:l0GT8LwhbRwaxrLze5FjDv3lHgxxqdf9opAVjJtXNh4=
-github.com/Chaintable/pipeline v0.0.56-0.20250828132443-84618e2d0ff2 h1:24Zda98XEJAmMnxEyuZlCYZwz7+FWdl/LX56se6VDHM=
-github.com/Chaintable/pipeline v0.0.56-0.20250828132443-84618e2d0ff2/go.mod h1:l0GT8LwhbRwaxrLze5FjDv3lHgxxqdf9opAVjJtXNh4=
-github.com/Chaintable/pipeline v0.0.56 h1:Cr6nGEsiZ/aOAr9xr6l5KVFovj9BBed04Jh35m4Libg=
-github.com/Chaintable/pipeline v0.0.56/go.mod h1:l0GT8LwhbRwaxrLze5FjDv3lHgxxqdf9opAVjJtXNh4=
+github.com/Chaintable/pipeline v0.0.57 h1:Yd0gMXmTaIcg5sNp7XDqgHHR0CqE8Wbm3vK6EYBUaa8=
+github.com/Chaintable/pipeline v0.0.57/go.mod h1:l0GT8LwhbRwaxrLze5FjDv3lHgxxqdf9opAVjJtXNh4=
 github.com/DataDog/zstd v1.5.6 h1:LbEglqepa/ipmmQJUDnSsfvA8e8IStVcGaFWDuxvGOY=
 github.com/DataDog/zstd v1.5.6/go.mod h1:g4AWEaM3yOg3HYfnJ3YIawPnVdXJh9QME85blwSAmyw=
 github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERoyfY=
