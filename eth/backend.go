@@ -484,6 +484,10 @@ func (s *Ethereum) APIs() []rpc.API {
 		}, {
 			Namespace: "net",
 			Service:   s.netRPCService,
+		}, {
+			// For X Layer
+			Namespace: "eth",
+			Service:   NewTxPreExecAPI(s),
 		},
 	}...)
 }
