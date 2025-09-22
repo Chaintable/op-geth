@@ -47,6 +47,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
+	"github.com/ethereum/go-ethereum/internal/monitor"
 	"github.com/ethereum/go-ethereum/internal/syncx"
 	"github.com/ethereum/go-ethereum/internal/version"
 	"github.com/ethereum/go-ethereum/log"
@@ -1991,7 +1992,19 @@ func (bc *BlockChain) processBlock(parentRoot common.Hash, block *types.Block, s
 	)
 	defer interrupt.Store(true) // terminate the prefetch at the end
 
-	start := time.Now()
+	blockHash := block.Hash().Hex()
+	blockHeight := block.NumberU64()
+
+	// Log block insertion start
+	monitor.LogTransactionStart(
+		blockHash,
+		monitor.ServiceNameBlockchain,
+		monitor.StepBlockchainInsert.ID,
+		monitor.StepBlockchainInsert.Key,
+		blockHeight,
+		0, // block type
+		"", "", "", 0,
+	)
 
 	if bc.cfg.NoPrefetch {
 		statedb, err = state.New(parentRoot, bc.statedb)
@@ -2073,6 +2086,7 @@ func (bc *BlockChain) processBlock(parentRoot common.Hash, block *types.Block, s
 			bc.logger.OnBlockEnd(blockEndErr)
 		}()
 	}
+
 	// Process block using the parent state as reference point
 	pstart := time.Now()
 	res, err := bc.processor.Process(block, statedb, bc.cfg.VmConfig)
@@ -2081,8 +2095,6 @@ func (bc *BlockChain) processBlock(parentRoot common.Hash, block *types.Block, s
 		return nil, err
 	}
 	ptime := time.Since(pstart)
-	// Export to LogStatistics
-	ls := metrics.GetLogStatistics()
 
 	vstart := time.Now()
 	if err := bc.validator.ValidateState(block, statedb, res, false); err != nil {
@@ -2164,33 +2176,14 @@ func (bc *BlockChain) processBlock(parentRoot common.Hash, block *types.Block, s
 	elapsed := time.Since(startTime) + 1 // prevent zero division
 	blockInsertTimer.Update(elapsed)
 
-	// Export to LogStatistics
-	ls.CumulativeValue(metrics.BlockNumberTag, int64(block.NumberU64()))
-	ls.CumulativeValue(metrics.TxCounter, int64(block.Transactions().Len()))
-	ls.CumulativeValue(metrics.GasUsedCounter, int64(block.GasUsed()))
-	ls.CumulativeTiming(metrics.AccountReadMs, statedb.AccountReads)
-	ls.CumulativeTiming(metrics.StorageReadMs, statedb.StorageReads)
-	ls.CumulativeTiming(metrics.AccountUpdateMs, statedb.AccountUpdates)
-	ls.CumulativeTiming(metrics.StorageUpdateMs, statedb.StorageUpdates)
-	ls.CumulativeTiming(metrics.AccountHashMs, statedb.AccountHashes)
-	ls.CumulativeTiming(metrics.TrieUpdateMs, statedb.AccountUpdates+statedb.StorageUpdates)
-	ls.CumulativeTiming(metrics.EvmExecPureMs, ptime-(statedb.AccountReads+statedb.StorageReads))
-	ls.CumulativeTiming(metrics.ValidationPureMs, vtime-(triehash+trieUpdate))
-	ls.CumulativeTiming(metrics.CrossValidateMs, xvtime)
-	ls.CumulativeTiming(metrics.WriteBlockMs, time.Since(wstart))
-	ls.CumulativeTiming(metrics.AccountCommitMs, statedb.AccountCommits)
-	ls.CumulativeTiming(metrics.StorageCommitMs, statedb.StorageCommits)
-	ls.CumulativeTiming(metrics.SnapshotCommitMs, statedb.SnapshotCommits)
-	ls.CumulativeTiming(metrics.TrieDBCommitMs, statedb.TrieDBCommits)
-	ls.CumulativeTiming(metrics.TotalBuildMs, time.Since(start))
-	ls.CumulativeTiming(metrics.ExecuteMs, proctime)
-	ls.CumulativeTiming(metrics.ValidateMs, vtime-(triehash+trieUpdate))
-
-	// Update the metrics touched during block commit
-
 	// TODO(rjl493456442) generalize the ResettingTimer
 	mgasps := float64(res.GasUsed) * 1000 / float64(elapsed)
 	chainMgaspsMeter.Update(time.Duration(mgasps))
+
+	// Log successful block finalization
+	monitor.LogTransactionEnd(blockHash, monitor.ServiceNameBlockchain, monitor.StepBlockchainFinalize.ID,
+		monitor.StepBlockchainFinalize.Key, blockHeight, blockHash, block.Time(),
+		0, "finalized", "", res.GasUsed)
 
 	return &blockProcessingResult{
 		usedGas:  res.GasUsed,

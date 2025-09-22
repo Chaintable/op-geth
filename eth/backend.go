@@ -137,6 +137,8 @@ type Ethereum struct {
 	interopRPC           *interop.InteropClient
 	supervisorFailsafe   atomic.Bool
 
+	xlayerLegacyRPCService *XlayerLegacyRPCService // Migration configuration for routing to xlayer-erigon
+
 	nodeCloser func() error
 }
 
@@ -415,6 +417,21 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	}
 	eth.APIBackend.gpo = gasprice.NewOracle(eth.APIBackend, config.GPO, config.Miner.GasPrice)
 
+	// Set up migration configuration if configured
+	if config.XLayer.LegacyPp.MigrationBlock != nil && config.XLayer.LegacyPp.PPRPCUrl != "" {
+		migrationConfig, err := NewXlayerLegacyRPCService(config)
+		if err != nil {
+			log.Error("Failed to create migration configuration", "error", err)
+			return nil, err
+		}
+		if migrationConfig != nil {
+			eth.xlayerLegacyRPCService = migrationConfig
+			log.Info("Migration routing enabled",
+				"migrationBlock", *config.XLayer.LegacyPp.MigrationBlock,
+				"ppUrl", config.XLayer.LegacyPp.PPRPCUrl)
+		}
+	}
+
 	if config.RollupSequencerHTTP != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		client, err := rpc.DialContext(ctx, config.RollupSequencerHTTP)
@@ -475,6 +492,14 @@ func makeExtraData(extra []byte) []byte {
 func (s *Ethereum) APIs() []rpc.API {
 	apis := ethapi.GetAPIs(s.APIBackend)
 
+	//// Append any APIs exposed explicitly by the consensus engine
+	//apis = append(apis, s.engine.APIs(s.BlockChain())...)
+
+	// Xlayer: Wrap APIs with migration routing if configured
+	if s.xlayerLegacyRPCService != nil {
+		apis = WrapAPIsForXlayer(apis, s.xlayerLegacyRPCService)
+	}
+
 	// Append any Sequencer APIs as enabled
 	if s.config.RollupSequencerTxConditionalEnabled {
 		log.Info("Enabling eth_sendRawTransactionConditional endpoint support")
@@ -499,6 +524,10 @@ func (s *Ethereum) APIs() []rpc.API {
 		}, {
 			Namespace: "net",
 			Service:   s.netRPCService,
+		}, {
+			// For X Layer
+			Namespace: "eth",
+			Service:   NewTxPreExecAPI(s),
 		},
 	}...)
 }
@@ -685,6 +714,9 @@ func (s *Ethereum) Stop() error {
 	}
 	if s.historicalRPCService != nil {
 		s.historicalRPCService.Close()
+	}
+	if s.xlayerLegacyRPCService != nil {
+		s.xlayerLegacyRPCService.Close()
 	}
 	if s.interopRPC != nil {
 		s.interopRPC.Close()
