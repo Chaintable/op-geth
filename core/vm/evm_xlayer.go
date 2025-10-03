@@ -47,7 +47,7 @@ func (evm *EVM) ClearInnerTxs() {
 }
 
 func beforeOp(
-	interpreter *EVMInterpreter,
+	evm *EVM,
 	callTyp string,
 	fromAddr common.Address,
 	toAddr *common.Address,
@@ -75,11 +75,11 @@ func beforeOp(
 		innerTx.Input = hexutil.Encode(input)
 	}
 
-	innerTxMeta := interpreter.evm.GetInnerTxMeta()
+	innerTxMeta := evm.GetInnerTxMeta()
 	if innerTxMeta == nil {
 		// TODO
 	}
-	depth := interpreter.evm.depth
+	depth := evm.depth
 	if depth == innerTxMeta.lastDepth {
 		innerTxMeta.index++
 		innerTxMeta.indexMap[depth] = innerTxMeta.index
@@ -99,9 +99,9 @@ func beforeOp(
 	innerTx.Dept = *big.NewInt(int64(depth))
 	innerTx.InternalIndex = *big.NewInt(int64(innerTxMeta.index))
 
-	interpreter.evm.AddInnerTx(innerTx)
+	evm.AddInnerTx(innerTx)
 
-	newIndex := len(interpreter.evm.GetInnerTxMeta().InnerTxs) - 1
+	newIndex := len(evm.GetInnerTxMeta().InnerTxs) - 1
 	if newIndex < 0 {
 		newIndex = 0
 	}
@@ -109,7 +109,7 @@ func beforeOp(
 	return innerTx, newIndex
 }
 
-func afterOp(interpreter *EVMInterpreter, opType string, gas_used uint64, newIndex int, innerTx *types.InnerTx, addr *common.Address, err error, ret []byte) {
+func afterOp(evm *EVM, opType string, gas_used uint64, newIndex int, innerTx *types.InnerTx, addr *common.Address, err error, ret []byte) {
 	innerTx.GasUsed = gas_used
 	if ret != nil {
 		innerTx.Output = hexutil.Encode(ret[:])
@@ -117,7 +117,7 @@ func afterOp(interpreter *EVMInterpreter, opType string, gas_used uint64, newInd
 	if err != nil {
 		innerTx.Error = err.Error()
 		innerTx.IsError = true
-		innerTxMeta := interpreter.evm.GetInnerTxMeta()
+		innerTxMeta := evm.GetInnerTxMeta()
 		for _, tx := range innerTxMeta.InnerTxs[newIndex:] {
 			tx.IsError = true
 		}
