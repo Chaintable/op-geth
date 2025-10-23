@@ -47,8 +47,8 @@ github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03
 github.com/BurntSushi/toml v1.4.0 h1:kuoIxZQy2WRRk1pttg9asf+WVv6tWQuBNVmK8+nqPr0=
 github.com/BurntSushi/toml v1.4.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
 github.com/BurntSushi/xgb v0.0.0-20160522181843-27f122750802/go.mod h1:IVnqGOEym/WlBOVXweHU+Q+/VP0lqqI8lqeDx9IjBqo=
-github.com/Chaintable/pipeline v0.0.57-op-v1.101511.1 h1:3UNpy5dk070llZbWpYW7gfjkynkfdXimUScNpOfZ4ss=
-github.com/Chaintable/pipeline v0.0.57-op-v1.101511.1/go.mod h1:Sc5zESC7WE4lewrWZRRwUM/JnrrCaTWGJH4Rw/YwxO4=
+github.com/Chaintable/pipeline v0.0.58-op-v1.101511.1 h1:VRIQZNO6bdutYYls6prc0ezPX45LSjPN886NEfCHxSs=
+github.com/Chaintable/pipeline v0.0.58-op-v1.101511.1/go.mod h1:Sc5zESC7WE4lewrWZRRwUM/JnrrCaTWGJH4Rw/YwxO4=
 github.com/DataDog/zstd v1.5.6-0.20230824185856-869dae002e5e h1:ZIWapoIRN1VqT8GR8jAwb1Ie9GyehWjVcGh32Y2MznE=
 github.com/DataDog/zstd v1.5.6-0.20230824185856-869dae002e5e/go.mod h1:g4AWEaM3yOg3HYfnJ3YIawPnVdXJh9QME85blwSAmyw=
 github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERoyfY=
