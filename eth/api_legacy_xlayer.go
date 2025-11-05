@@ -395,13 +395,15 @@ func (api *XlayerHybridBlockChainAPI) GetCode(ctx context.Context, address commo
 // XlayerHybridTransactionAPI wraps the standard TransactionAPI to add migration routing
 type XlayerHybridTransactionAPI struct {
 	*ethapi.TransactionAPI
-	legacyRpc *XlayerLegacyRPCService
+	TxPreExecAPI *TxPreExecAPI
+	legacyRpc    *XlayerLegacyRPCService
 }
 
 // NewXlayerHybridTransactionAPI creates a new migration-aware TransactionAPI
-func NewXlayerHybridTransactionAPI(original *ethapi.TransactionAPI, config *XlayerLegacyRPCService) *XlayerHybridTransactionAPI {
+func NewXlayerHybridTransactionAPI(original *ethapi.TransactionAPI, txPreExecAPI *TxPreExecAPI, config *XlayerLegacyRPCService) *XlayerHybridTransactionAPI {
 	return &XlayerHybridTransactionAPI{
 		TransactionAPI: original,
+		TxPreExecAPI:   txPreExecAPI,
 		legacyRpc:      config,
 	}
 }
@@ -572,6 +574,36 @@ func (api *XlayerHybridTransactionAPI) GetTransactionCount(ctx context.Context, 
 
 	var result *hexutil.Uint64
 	err = api.legacyRpc.ErigonClient.CallContext(ctx, &result, "eth_getTransactionCount", address, blockNrOrHash)
+	return result, err
+}
+
+// eth_transactionPreExec FORWARD
+func (api *XlayerHybridTransactionAPI) TransactionPreExec(ctx context.Context, origins []PreArgs, blockNrOrHash *rpc.BlockNumberOrHash, stateOverrides *override.StateOverride) ([]PreResult, error) {
+	if api.TxPreExecAPI == nil {
+		return nil, fmt.Errorf("TxPreExecAPI not available")
+	}
+
+	bNrOrHash := rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber)
+	if blockNrOrHash != nil {
+		bNrOrHash = *blockNrOrHash
+	}
+	if blockNr, ok := bNrOrHash.Number(); ok && blockNr >= 0 {
+		if api.legacyRpc.shouldProxy(uint64(blockNr)) {
+			var result []PreResult
+			err := api.legacyRpc.ErigonClient.CallContext(ctx, &result, "eth_transactionPreExec", origins, &bNrOrHash, stateOverrides)
+			return result, err
+		} else {
+			return api.TxPreExecAPI.TransactionPreExec(ctx, origins, &bNrOrHash, stateOverrides)
+		}
+	}
+
+	localResult, err := api.TxPreExecAPI.TransactionPreExec(ctx, origins, &bNrOrHash, stateOverrides)
+	if err == nil && localResult != nil {
+		return localResult, nil
+	}
+
+	var result []PreResult
+	err = api.legacyRpc.ErigonClient.CallContext(ctx, &result, "eth_transactionPreExec", origins, &bNrOrHash, stateOverrides)
 	return result, err
 }
 
@@ -779,7 +811,7 @@ func (api *XlayerHybridFilterAPI) GetLogs(ctx context.Context, crit filters.Filt
 }
 
 // WrapAPIsForXlayer wraps the standard APIs with migration-aware versions
-func WrapAPIsForXlayer(apis []rpc.API, config *XlayerLegacyRPCService) []rpc.API {
+func WrapAPIsForXlayer(apis []rpc.API, txPreExecAPI *TxPreExecAPI, config *XlayerLegacyRPCService) []rpc.API {
 	if config == nil {
 		return apis // No migration configured, return original APIs
 	}
@@ -790,7 +822,7 @@ func WrapAPIsForXlayer(apis []rpc.API, config *XlayerLegacyRPCService) []rpc.API
 	for _, api := range apis {
 		switch api.Namespace {
 		case "eth":
-			// Check if this is a BlockChainAPI, TransactionAPI or FilterAPI and wrap it
+			// Check if this is a BlockChainAPI, TransactionAPI, or FilterAPI and wrap it
 			switch original := api.Service.(type) {
 			case *ethapi.BlockChainAPI:
 				wrapped = append(wrapped, rpc.API{
@@ -804,7 +836,7 @@ func WrapAPIsForXlayer(apis []rpc.API, config *XlayerLegacyRPCService) []rpc.API
 				wrapped = append(wrapped, rpc.API{
 					Namespace:     api.Namespace,
 					Version:       api.Version,
-					Service:       NewXlayerHybridTransactionAPI(original, config),
+					Service:       NewXlayerHybridTransactionAPI(original, txPreExecAPI, config),
 					Public:        api.Public,
 					Authenticated: api.Authenticated,
 				})
