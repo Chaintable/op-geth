@@ -401,7 +401,7 @@ func (w *mockTxPreExecAPIWrapper) TransactionPreExec(ctx context.Context, origin
 
 	// Route by block number
 	if blockNr, ok := bNrOrHash.Number(); ok && blockNr >= 0 {
-		if w.legacyRpc.shouldProxy(uint64(blockNr)) {
+		if w.legacyRpc.shouldProxyByNumber(blockNr) {
 			var result []PreResult
 			err := w.legacyRpc.ErigonClient.CallContext(ctx, &result, "eth_transactionPreExec", origins, &bNrOrHash, stateOverrides)
 			return result, err
@@ -602,7 +602,7 @@ func TestHybridBlockChainAPI_ProxiesGetStorageAt(t *testing.T) {
 	}
 	defer legacy.Close()
 
-	api := NewXlayerHybridBlockChainAPI(nil, legacy)
+	api := NewXlayerHybridBlockChainAPI(nil, nil, legacy)
 
 	// Test that we can call Erigon to get storage
 	ctx := context.Background()
@@ -648,7 +648,7 @@ func TestHybridTransactionAPI_ProxiesByNumber(t *testing.T) {
 		t.Fatalf("failed to create legacy service: %v", err)
 	}
 	defer legacy.Close()
-	api := NewXlayerHybridTransactionAPI(nil, nil, legacy)
+	api := NewXlayerHybridTransactionAPI(nil, legacy)
 
 	ctx := context.Background()
 
@@ -833,7 +833,7 @@ func TestBoundaryConditions_MigrationBlock(t *testing.T) {
 
 	// Test shouldProxy logic at boundaries
 	testCases := []struct {
-		blockNum    uint64
+		blockNum    rpc.BlockNumber
 		shouldProxy bool
 		description string
 	}{
@@ -847,7 +847,7 @@ func TestBoundaryConditions_MigrationBlock(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
-			result := legacy.shouldProxy(tc.blockNum)
+			result := legacy.shouldProxyByNumber(tc.blockNum)
 			if result != tc.shouldProxy {
 				t.Errorf("Block %d: shouldProxy=%v, want %v", tc.blockNum, result, tc.shouldProxy)
 			}
@@ -898,7 +898,7 @@ func TestSpecialBlockNumbers(t *testing.T) {
 
 	t.Run("EarliestBlockNumber should proxy", func(t *testing.T) {
 		// Earliest is block 0, which should proxy if migration block > 0
-		if !legacy.shouldProxy(0) {
+		if !legacy.shouldProxyByNumber(0) {
 			t.Error("shouldProxy should return true for block 0 (EarliestBlockNumber)")
 		}
 	})
@@ -909,18 +909,166 @@ func TestSpecialBlockNumbers(t *testing.T) {
 		// which returns (number, ok). When ok is false or the number is negative,
 		// the code falls back to local-first strategy instead of using shouldProxy.
 		// This test verifies that block 0 (earliest) correctly proxies.
-		if !legacy.shouldProxy(0) {
+		if !legacy.shouldProxyByNumber(0) {
 			t.Error("Block 0 should proxy to Erigon")
 		}
 
 		// Verify normal blocks around migration boundary
-		if !legacy.shouldProxy(99) {
+		if !legacy.shouldProxyByNumber(99) {
 			t.Error("Block 99 should proxy to Erigon")
 		}
-		if legacy.shouldProxy(100) {
+		if legacy.shouldProxyByNumber(100) {
 			t.Error("Block 100 should not proxy")
 		}
 	})
+}
+
+func TestShouldProxyBlockNrOrHash(t *testing.T) {
+	t.Parallel()
+
+	server, _ := createMockErigonServer(t)
+	defer server.Close()
+
+	// Create mock local blockchain with blocks 100-105
+	mockHeaders := make(map[common.Hash]map[string]interface{})
+	storedHashes := make(map[uint64]common.Hash)
+
+	for i := uint64(100); i <= 105; i++ {
+		header := &types.Header{
+			Number:     big.NewInt(int64(i)),
+			ParentHash: storedHashes[i-1],
+			Time:       uint64(time.Now().Unix()),
+		}
+		hash := header.Hash()
+		storedHashes[i] = hash
+		mockHeaders[hash] = map[string]interface{}{
+			"number": hexutil.Uint64(i),
+			"hash":   hash,
+		}
+	}
+
+	migrationBlock := uint64(100)
+	ethCfg := &ethconfig.Config{XLayer: ethconfig.XLayerConfig{LegacyPp: ethconfig.MigrationConfig{
+		MigrationBlock: &migrationBlock,
+		PPRPCUrl:       server.URL,
+		PPRPCTimeout:   5 * time.Second,
+	}}}
+	legacy, err := NewXlayerLegacyRPCService(ethCfg)
+	if err != nil {
+		t.Fatalf("failed to create legacy service: %v", err)
+	}
+	defer legacy.Close()
+
+	api := &XlayerHybridBlockChainAPI{
+		BlockChainAPI: nil,
+		legacyRpc:     legacy,
+	}
+
+	testCases := []struct {
+		name        string
+		input       *rpc.BlockNumberOrHash
+		shouldProxy bool
+		description string
+	}{
+		{
+			name:        "nil_input",
+			input:       nil,
+			shouldProxy: false,
+			description: "nil BlockNumberOrHash should not proxy",
+		},
+		{
+			name:        "latest_block",
+			input:       makeBlockNumberOrHash(rpc.PendingBlockNumber),
+			shouldProxy: false,
+			description: "pending (-1) should never proxy",
+		},
+		{
+			name:        "pending_block",
+			input:       makeBlockNumberOrHash(rpc.LatestBlockNumber),
+			shouldProxy: false,
+			description: "latest (-2) should never proxy",
+		},
+		{
+			name:        "earliest_block",
+			input:       makeBlockNumberOrHash(rpc.FinalizedBlockNumber),
+			shouldProxy: false,
+			description: "finalised (-3) should never proxy (special tag)",
+		},
+		{
+			name:        "safe_block",
+			input:       makeBlockNumberOrHash(rpc.SafeBlockNumber),
+			shouldProxy: false,
+			description: "safe (-4) should never proxy",
+		},
+		{
+			name:        "finalized_block",
+			input:       makeBlockNumberOrHash(rpc.EarliestBlockNumber),
+			shouldProxy: false,
+			description: "earliest (-5) should never proxy",
+		},
+		{
+			name:        "block_below_migration",
+			input:       makeBlockNumberOrHash(rpc.BlockNumber(50)),
+			shouldProxy: true,
+			description: "block 50 < 100 should proxy",
+		},
+		{
+			name:        "block_at_migration_minus_one",
+			input:       makeBlockNumberOrHash(rpc.BlockNumber(99)),
+			shouldProxy: true,
+			description: "block 99 (migration-1) should proxy",
+		},
+		{
+			name:        "block_at_migration",
+			input:       makeBlockNumberOrHash(rpc.BlockNumber(100)),
+			shouldProxy: false,
+			description: "block 100 (migration) should use local",
+		},
+		{
+			name:        "block_above_migration",
+			input:       makeBlockNumberOrHash(rpc.BlockNumber(101)),
+			shouldProxy: false,
+			description: "block 101 (migration+1) should use local",
+		},
+		{
+			name:        "block_zero",
+			input:       makeBlockNumberOrHash(rpc.BlockNumber(0)),
+			shouldProxy: true,
+			description: "block 0 should proxy",
+		},
+	}
+
+	// Test block number
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := api.shouldProxy(context.Background(), tc.input)
+			if result != tc.shouldProxy {
+				t.Errorf("%s: got shouldProxy=%v, want %v", tc.description, result, tc.shouldProxy)
+			}
+		})
+	}
+}
+
+// testHeaderByHashGetter implements the headerByHashGetter interface for testing
+type testHeaderByHashGetter struct {
+	headers map[common.Hash]map[string]interface{}
+}
+
+func (t *testHeaderByHashGetter) GetHeaderByHash(ctx context.Context, hash common.Hash) map[string]interface{} {
+	if headerData, ok := t.headers[hash]; ok {
+		return headerData
+	}
+	return nil
+}
+
+func makeBlockNumberOrHash(num rpc.BlockNumber) *rpc.BlockNumberOrHash {
+	result := rpc.BlockNumberOrHashWithNumber(num)
+	return &result
+}
+
+func makeBlockHash(hash common.Hash) *rpc.BlockNumberOrHash {
+	result := rpc.BlockNumberOrHashWithHash(hash, false)
+	return &result
 }
 
 // Mock BlockChainAPI that can simulate local hits and misses
@@ -1043,7 +1191,7 @@ func TestLocalStrategy_TransactionAPIs(t *testing.T) {
 	}
 	defer legacy.Close()
 
-	_ = NewXlayerHybridTransactionAPI(nil, nil, legacy)
+	_ = NewXlayerHybridTransactionAPI(nil, legacy)
 
 	t.Run("GetTransactionByHash - fallback to Erigon", func(t *testing.T) {
 		// Direct call to Erigon to verify it works
@@ -1698,7 +1846,7 @@ func TestTransactionAPI_AdditionalMethods(t *testing.T) {
 	}
 	defer legacy.Close()
 
-	api := NewXlayerHybridTransactionAPI(nil, nil, legacy)
+	api := NewXlayerHybridTransactionAPI(nil, legacy)
 	ctx := context.Background()
 
 	t.Run("GetTransactionCount - FORWARD strategy", func(t *testing.T) {
@@ -1712,7 +1860,7 @@ func TestTransactionAPI_AdditionalMethods(t *testing.T) {
 	})
 	t.Run("GetBlockInternalTransactions - FORWARD strategy", func(t *testing.T) {
 		// Block 50 < migration, should proxy
-		if legacy.shouldProxy(50) {
+		if legacy.shouldProxyByNumber(50) {
 			t.Log("Correctly routes to Erigon for block 50")
 		}
 	})
@@ -1847,13 +1995,13 @@ func TestEdgeCase_LargeBlockNumbers(t *testing.T) {
 	defer legacy.Close()
 
 	// Test with very large block numbers
-	if !legacy.shouldProxy(999999) {
+	if !legacy.shouldProxyByNumber(999999) {
 		t.Error("shouldProxy(999999) should be true")
 	}
-	if legacy.shouldProxy(1000000) {
+	if legacy.shouldProxyByNumber(1000000) {
 		t.Error("shouldProxy(1000000) should be false")
 	}
-	if legacy.shouldProxy(1000001) {
+	if legacy.shouldProxyByNumber(1000001) {
 		t.Error("shouldProxy(1000001) should be false")
 	}
 }
@@ -2098,7 +2246,7 @@ func TestSpecialBlockNumbers_NegativeValues(t *testing.T) {
 	})
 
 	t.Run("Earliest block (0) should proxy", func(t *testing.T) {
-		if !legacy.shouldProxy(0) {
+		if !legacy.shouldProxyByNumber(0) {
 			t.Error("block 0 (earliest) should proxy to Erigon")
 		}
 	})
@@ -2144,7 +2292,7 @@ func TestNilLegacyService(t *testing.T) {
 			legacyRpc:     nil,
 		}
 		// This would panic when trying to access api.legacyRpc.shouldProxy
-		_ = api.legacyRpc.shouldProxy(100)
+		_ = api.legacyRpc.shouldProxyByNumber(100)
 	})
 }
 
