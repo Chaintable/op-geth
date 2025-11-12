@@ -15,6 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/filters"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/internal/ethapi/override"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
@@ -758,6 +759,16 @@ func (api *XlayerHybridFilterAPI) GetLogs(ctx context.Context, crit filters.Filt
 	}
 
 	return api.FilterAPI.GetLogs(ctx, crit)
+}
+
+func (api *XlayerHybridFilterAPI) Logs(ctx context.Context, crit filters.FilterCriteria) (*rpc.Subscription, error) {
+	migrationBlock := int64(api.legacyRpc.MigrationBlock)
+	if crit.FromBlock != nil && crit.FromBlock.Int64() < migrationBlock {
+		log.Warn("Parameter fromBlock is earlier than migration block, overwriting fromBlock to migrationBlock", "fromBlock", crit.FromBlock.Int64(), "migrationBlock", migrationBlock)
+		crit.FromBlock = big.NewInt(migrationBlock)
+	}
+
+	return api.FilterAPI.Logs(ctx, crit)
 }
 
 // WrapAPIsForXlayer wraps the standard APIs with migration-aware versions
