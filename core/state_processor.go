@@ -63,6 +63,9 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		blockNumber = block.Number()
 		allLogs     []*types.Log
 		gp          = new(GasPool).AddGas(block.GasLimit())
+
+		// For X Layer
+		allInnerTxs [][]*types.InnerTx
 	)
 
 	// Mutate the block and state according to any hard-fork specs
@@ -97,12 +100,16 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		}
 		statedb.SetTxContext(tx.Hash(), i)
 
-		receipt, err := ApplyTransactionWithEVM(msg, gp, statedb, blockNumber, blockHash, context.Time, tx, usedGas, evm)
+		receipt, innerTxs, err := ApplyTransactionWithEVM_XLayer(msg, gp, statedb, blockNumber, blockHash, context.Time, tx, usedGas, evm)
 		if err != nil {
 			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 		}
+
 		receipts = append(receipts, receipt)
 		allLogs = append(allLogs, receipt.Logs...)
+
+		// For X Layer
+		allInnerTxs = append(allInnerTxs, innerTxs)
 	}
 
 	isIsthmus := p.config.IsIsthmus(block.Time())
@@ -137,6 +144,9 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		Requests: requests,
 		Logs:     allLogs,
 		GasUsed:  *usedGas,
+
+		// For X Layer
+		InnerTxs: allInnerTxs,
 	}, nil
 }
 
@@ -144,6 +154,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 // and uses the input parameters for its environment similar to ApplyTransaction. However,
 // this method takes an already created EVM instance as input.
 func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, blockNumber *big.Int, blockHash common.Hash, blockTime uint64, tx *types.Transaction, usedGas *uint64, evm *vm.EVM) (receipt *types.Receipt, err error) {
+
 	if hooks := evm.Config.Tracer; hooks != nil {
 		if hooks.OnTxStart != nil {
 			hooks.OnTxStart(evm.GetVMContext(), tx, msg.From)
@@ -177,6 +188,7 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 	if statedb.Database().TrieDB().IsVerkle() {
 		statedb.AccessEvents().Merge(evm.AccessEvents)
 	}
+
 	return MakeReceipt(evm, result, statedb, blockNumber, blockHash, blockTime, tx, *usedGas, root, evm.ChainConfig(), nonce), nil
 }
 
