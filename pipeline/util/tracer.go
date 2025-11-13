@@ -75,6 +75,11 @@ func BuildPipelineTransaction(tx *types.Transaction, receipt *types.Receipt, fro
 	if gasPrice == nil {
 		gasPrice = tx.GasPrice()
 	}
+	nonce := tx.Nonce()
+	if nonce == 0 && receipt.DepositNonce != nil {
+		nonce = *receipt.DepositNonce
+	}
+
 	transaction := ptypes.Transaction{
 		ID:               tx.Hash().Hex(),
 		From:             strings.ToLower(from.Hex()),
@@ -86,7 +91,7 @@ func BuildPipelineTransaction(tx *types.Transaction, receipt *types.Receipt, fro
 		GasFeeCap:        common.Big0,
 		GasTipCap:        common.Big0,
 		Input:            tx.Data(),
-		Nonce:            big.NewInt(int64(tx.Nonce())),
+		Nonce:            big.NewInt(int64(nonce)),
 		TransactionIndex: int64(receipt.TransactionIndex),
 		Value:            (*hexutil.Big)(tx.Value()),
 	}
