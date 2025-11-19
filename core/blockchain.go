@@ -65,7 +65,6 @@ var (
 	headFastBlockGauge      = metrics.NewRegisteredGauge("chain/head/receipt", nil)
 	headFinalizedBlockGauge = metrics.NewRegisteredGauge("chain/head/finalized", nil)
 	headSafeBlockGauge      = metrics.NewRegisteredGauge("chain/head/safe", nil)
-	headBaseFeeGauge        = metrics.NewRegisteredGauge("chain/head/basefee", nil)
 
 	chainInfoGauge   = metrics.NewRegisteredGaugeInfo("chain/info", nil)
 	chainMgaspsMeter = metrics.NewRegisteredResettingTimer("chain/mgasps", nil)
@@ -1263,7 +1262,9 @@ func (bc *BlockChain) writeHeadBlock(block *types.Block) {
 
 	bc.currentBlock.Store(block.Header())
 	headBlockGauge.Update(int64(block.NumberU64()))
-	headBaseFeeGauge.TryUpdate(block.Header().BaseFee)
+
+	// OPStack addition
+	updateOptimismBlockMetrics(block.Header())
 }
 
 // stopWithoutSaving stops the blockchain service. If any imports are currently in progress
@@ -1431,7 +1432,9 @@ func (bc *BlockChain) InsertReceiptChain(blockChain types.Blocks, receiptChain [
 		bc.currentSnapBlock.Store(header)
 		headHeaderGauge.Update(header.Number.Int64())
 		headFastBlockGauge.Update(header.Number.Int64())
-		headBaseFeeGauge.TryUpdate(header.BaseFee)
+
+		// OPStack addition
+		updateOptimismBlockMetrics(header)
 		return nil
 	}
 	// writeAncient writes blockchain and corresponding receipt chain into ancient store.
@@ -2836,7 +2839,9 @@ func (bc *BlockChain) InsertHeadersBeforeCutoff(headers []*types.Header) (int, e
 	bc.currentSnapBlock.Store(last)
 	headHeaderGauge.Update(last.Number.Int64())
 	headFastBlockGauge.Update(last.Number.Int64())
-	headBaseFeeGauge.TryUpdate(last.BaseFee)
+
+	// OPStack addition
+	updateOptimismBlockMetrics(last)
 	return 0, nil
 }
 
