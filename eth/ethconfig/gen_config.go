@@ -77,6 +77,8 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		RollupHaltOnIncompatibleProtocolVersion   string
 		InteropMessageRPC                         string `toml:",omitempty"`
 		InteropMempoolFiltering                   bool   `toml:",omitempty"`
+		// For X Layer
+		XLayer XLayerConfig `toml:",omitempty"`
 	}
 	var enc Config
 	enc.Genesis = c.Genesis
@@ -139,6 +141,8 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.RollupHaltOnIncompatibleProtocolVersion = c.RollupHaltOnIncompatibleProtocolVersion
 	enc.InteropMessageRPC = c.InteropMessageRPC
 	enc.InteropMempoolFiltering = c.InteropMempoolFiltering
+	// For X Layer
+	enc.XLayer = c.XLayer
 	return &enc, nil
 }
 
@@ -205,6 +209,8 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		RollupHaltOnIncompatibleProtocolVersion   *string
 		InteropMessageRPC                         *string `toml:",omitempty"`
 		InteropMempoolFiltering                   *bool   `toml:",omitempty"`
+		// For X Layer
+		XLayer *XLayerConfig `toml:",omitempty"`
 	}
 	var dec Config
 	if err := unmarshal(&dec); err != nil {
@@ -389,6 +395,10 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.InteropMempoolFiltering != nil {
 		c.InteropMempoolFiltering = *dec.InteropMempoolFiltering
+	}
+	// For X Layer
+	if dec.XLayer != nil {
+		c.XLayer = *dec.XLayer
 	}
 	return nil
 }
