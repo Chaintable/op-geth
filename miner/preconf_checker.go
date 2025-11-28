@@ -15,7 +15,9 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/preconf"
@@ -222,7 +224,8 @@ func (c *preconfChecker) UpdateOptimismSyncStatus(newOptimismSyncStatus *preconf
 // unsafe_l2.l1_origin.number normal growth
 // engine_sync_target.number normal growth
 func (c *preconfChecker) isSyncStatusOk(newStatus *preconf.OptimismSyncStatus) bool {
-	return c.optimismSyncStatus.HeadL1.Number <= newStatus.HeadL1.Number &&
+	return newStatus.HeadL1.Number > 0 &&
+		c.optimismSyncStatus.HeadL1.Number <= newStatus.HeadL1.Number &&
 		c.optimismSyncStatus.UnsafeL2.Number <= newStatus.UnsafeL2.Number &&
 		c.optimismSyncStatus.UnsafeL2.L1Origin.Number <= newStatus.UnsafeL2.L1Origin.Number &&
 		c.optimismSyncStatus.EngineSyncTarget.Number <= newStatus.EngineSyncTarget.Number
@@ -249,14 +252,14 @@ func (c *preconfChecker) updateDepositTxs(currentL1, headL1 uint64) error {
 	return nil
 }
 
-func (c *preconfChecker) Preconf(tx *types.Transaction) (*types.Receipt, error) {
+func (c *preconfChecker) Preconf(tx *types.Transaction) (*types.Receipt, []byte, error) {
 	defer preconf.MetricsPreconfExecuteCost(time.Now())
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if err := c.precheck(); err != nil {
-		return nil, fmt.Errorf("%w because of %w", ErrPreconfNotAvailable, err)
+		return nil, nil, fmt.Errorf("%w because of %w", ErrPreconfNotAvailable, err)
 	}
 	log.Trace("preconf", "tx", tx.Hash().Hex(), "nonce", tx.Nonce(), "env.header.Number", c.env.header.Number)
 
@@ -268,7 +271,7 @@ func (c *preconfChecker) Preconf(tx *types.Transaction) (*types.Receipt, error) 
 	for _, receipt := range c.env.receipts {
 		if receipt.TxHash == tx.Hash() {
 			log.Trace("preconf tx already in block", "tx", tx.Hash().Hex())
-			return receipt, nil
+			return receipt, nil, nil
 		}
 	}
 
@@ -356,9 +359,9 @@ func (c *preconfChecker) precheck() error {
 }
 
 // applyTxWithResetEnv applies a transaction and resets the environment if a gas limit reached error occurs.
-func (c *preconfChecker) applyTxWithResetEnv(env *environment, tx *types.Transaction) (*types.Receipt, error) {
+func (c *preconfChecker) applyTxWithResetEnv(env *environment, tx *types.Transaction) (*types.Receipt, []byte, error) {
 	defer preconf.LogIfSlow(time.Now(), "applyTxWithResetEnv", "tx", tx.Hash().Hex(), "nonce", tx.Nonce())
-	receipt, err := c.applyTx(env, tx)
+	receipt, returnData, err := c.applyTx(env, tx)
 	if err != nil {
 		if errors.Is(err, core.ErrGasLimitReached) {
 			// This indicates we should reset the env's gas limit and increment header.number+1.
@@ -371,28 +374,79 @@ func (c *preconfChecker) applyTxWithResetEnv(env *environment, tx *types.Transac
 			log.Trace("reset env for gas limit reached", "env.header.Number", c.env.header.Number, "env.gasPool(pre)", preGasLimit, "tx.gas", txGasLimit, "env.gasPool(now)", c.env.gasPool.Gas(), "tx", tx.Hash())
 			return c.applyTx(c.env, tx)
 		}
-		return nil, err
+		return nil, nil, err
 	}
-	return receipt, nil
+	return receipt, returnData, nil
 }
 
-func (c *preconfChecker) applyTx(env *environment, tx *types.Transaction) (*types.Receipt, error) {
+func (c *preconfChecker) applyTx(env *environment, tx *types.Transaction) (*types.Receipt, []byte, error) {
 	env.state.SetTxContext(tx.Hash(), env.tcount)
 	var (
 		snap = env.state.Snapshot()
 		gp   = env.gasPool.Gas()
 	)
-	// receipt, err := core.ApplyTransaction(c.chainConfig, c.chain, &env.coinbase, env.gasPool, env.state, env.header, tx, &env.header.GasUsed, *c.chain.GetVMConfig())
-	receipt, err := core.ApplyTransaction(env.evm, env.gasPool, env.state, env.header, tx, &env.header.GasUsed)
+	receipt, returnData, err := applyPreconfTransaction(env.evm, env.gasPool, env.state, env.header, tx, &env.header.GasUsed)
 	if err != nil {
 		env.state.RevertToSnapshot(snap)
 		env.gasPool.SetGas(gp)
-		return nil, err
+		return nil, nil, err
 	}
 	env.txs = append(env.txs, tx)
 	env.receipts = append(env.receipts, receipt)
 	env.tcount++
-	return receipt, nil
+	return receipt, returnData, nil
+}
+
+// core.ApplyTransaction(env.evm, env.gasPool, env.state, env.header, tx, &env.header.GasUsed)
+func applyPreconfTransaction(evm *vm.EVM, gp *core.GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, usedGas *uint64) (receipt *types.Receipt, returnData []byte, err error) {
+	// ApplyTransaction
+	rules := evm.ChainConfig().Rules(header.Number, false, header.Time)
+	msg, err := core.TransactionToMessage(tx, types.MakeSigner(evm.ChainConfig(), header.Number, header.Time), header.BaseFee, &rules)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// ApplyTransactionWithEVM
+	if hooks := evm.Config.Tracer; hooks != nil {
+		if hooks.OnTxStart != nil {
+			hooks.OnTxStart(evm.GetVMContext(), tx, msg.From)
+		}
+		if hooks.OnTxEnd != nil {
+			defer func() { hooks.OnTxEnd(receipt, err) }()
+		}
+	}
+
+	nonce := tx.Nonce()
+	if msg.IsDepositTx && evm.ChainConfig().IsOptimismRegolith(evm.Context.Time) {
+		nonce = statedb.GetNonce(msg.From)
+	}
+
+	// Apply the transaction to the current state (included in the env).
+	result, err := core.ApplyMessage(evm, msg, gp)
+	if err != nil {
+		return nil, nil, err
+	}
+	if result.Failed() && result.Err != vm.ErrExecutionReverted {
+		return nil, result.Return(), result.Err
+	}
+	blockNumber, blockHash, blockTime := header.Number, header.Hash(), header.Time
+	// Update the state with pending changes.
+	var root []byte
+	if evm.ChainConfig().IsByzantium(blockNumber) {
+		evm.StateDB.Finalise(true)
+	} else {
+		root = statedb.IntermediateRoot(evm.ChainConfig().IsEIP158(blockNumber)).Bytes()
+	}
+	*usedGas += result.UsedGas
+
+	// Merge the tx-local access event into the "block-local" one, in order to collect
+	// all values, so that the witness can be built.
+	if statedb.Database().TrieDB().IsVerkle() {
+		statedb.AccessEvents().Merge(evm.AccessEvents)
+	}
+
+	receipt = core.MakeReceipt(evm, result, statedb, blockNumber, blockHash, blockTime, tx, *usedGas, root, evm.ChainConfig(), nonce)
+	return receipt, result.Revert(), nil
 }
 
 func (c *preconfChecker) PausePreconf() chan<- []*types.Transaction {
@@ -425,7 +479,7 @@ func (c *preconfChecker) UnpausePreconf(env *environment, preconfReady func()) {
 	// Load deposit txs
 	log.Trace("apply deposit txs", "deposit_txs", len(c.depositTxs))
 	for _, tx := range c.depositTxs {
-		if _, err := c.applyTx(c.env, tx); err != nil {
+		if _, _, err := c.applyTx(c.env, tx); err != nil {
 			log.Warn("failed to apply deposit tx", "err", err, "tx", tx.Hash().Hex())
 			continue
 		}
@@ -441,7 +495,7 @@ func (c *preconfChecker) UnpausePreconf(env *environment, preconfReady func()) {
 	}
 	log.Trace("apply unsealed preconf txs", "count", len(unsealedPreconfTxs))
 	for _, tx := range unsealedPreconfTxs {
-		receipt, err := c.applyTxWithResetEnv(c.env, tx)
+		receipt, _, err := c.applyTxWithResetEnv(c.env, tx)
 		if err != nil {
 			log.Warn("failed to apply unsealed preconf tx", "err", err, "tx", tx.Hash().Hex())
 			continue

@@ -153,7 +153,7 @@ func hashAlloc(ga *types.GenesisAlloc, isVerkle, isMantleSkadi bool) (common.Has
 		if account.Balance != nil {
 			statedb.AddBalance(addr, uint256.MustFromBig(account.Balance), tracing.BalanceIncreaseGenesisBalance)
 		}
-		statedb.SetCode(addr, account.Code)
+		statedb.SetCode(addr, account.Code, tracing.CodeChangeGenesis)
 		statedb.SetNonce(addr, account.Nonce, tracing.NonceChangeGenesis)
 		for key, value := range account.Storage {
 			statedb.SetState(addr, key, value)
@@ -190,7 +190,7 @@ func flushAlloc(ga *types.GenesisAlloc, triedb *triedb.Database, isMantleSkadi b
 			// already captures the allocations.
 			statedb.AddBalance(addr, uint256.MustFromBig(account.Balance), tracing.BalanceIncreaseGenesisBalance)
 		}
-		statedb.SetCode(addr, account.Code)
+		statedb.SetCode(addr, account.Code, tracing.CodeChangeGenesis)
 		statedb.SetNonce(addr, account.Nonce, tracing.NonceChangeGenesis)
 		for key, value := range account.Storage {
 			statedb.SetState(addr, key, value)
@@ -273,7 +273,9 @@ func (e *GenesisMismatchError) Error() string {
 
 // ChainOverrides contains the changes to chain config.
 type ChainOverrides struct {
-	OverridePrague *uint64
+	OverrideOsaka  *uint64
+	OverrideBPO1   *uint64
+	OverrideBPO2   *uint64
 	OverrideVerkle *uint64
 
 	// optimism
@@ -288,8 +290,14 @@ func (o *ChainOverrides) apply(cfg *params.ChainConfig) error {
 	if o == nil || cfg == nil {
 		return nil
 	}
-	if o.OverridePrague != nil {
-		cfg.PragueTime = o.OverridePrague
+	if o.OverrideOsaka != nil {
+		cfg.OsakaTime = o.OverrideOsaka
+	}
+	if o.OverrideBPO1 != nil {
+		cfg.BPO1Time = o.OverrideBPO1
+	}
+	if o.OverrideBPO2 != nil {
+		cfg.BPO2Time = o.OverrideBPO2
 	}
 	if o.OverrideVerkle != nil {
 		cfg.VerkleTime = o.OverrideVerkle
@@ -321,11 +329,14 @@ func (o *ChainOverrides) apply(cfg *params.ChainConfig) error {
 		cfg.ProxyOwnerUpgradeTime = mantleUpgradeChainConfig.ProxyOwnerUpgradeTime
 		cfg.MantleEverestTime = mantleUpgradeChainConfig.MantleEverestTime
 		cfg.MantleSkadiTime = mantleUpgradeChainConfig.MantleSkadiTime
+		cfg.MantleLimbTime = mantleUpgradeChainConfig.MantleLimbTime
 
 		// active standard EVM version (shanghai/cancun/prague)  in mantle skadi time
 		cfg.ShanghaiTime = mantleUpgradeChainConfig.MantleSkadiTime
 		cfg.CancunTime = mantleUpgradeChainConfig.MantleSkadiTime
 		cfg.PragueTime = mantleUpgradeChainConfig.MantleSkadiTime
+		// active standard EVM version (osaka)  in mantle limb time
+		cfg.OsakaTime = mantleUpgradeChainConfig.MantleLimbTime
 	}
 
 	return cfg.CheckConfigForkOrder()
@@ -568,6 +579,11 @@ func (g *Genesis) toBlockWithRoot(root common.Hash, storageRootMessagePasser com
 			}
 			if head.BlobGasUsed == nil {
 				head.BlobGasUsed = new(uint64)
+			}
+		} else {
+			if g.ExcessBlobGas != nil {
+				log.Warn("Invalid genesis, unexpected ExcessBlobGas set before Cancun, allowing it for testing purposes")
+				head.ExcessBlobGas = g.ExcessBlobGas
 			}
 		}
 		if conf.IsPrague(num, g.Timestamp) {

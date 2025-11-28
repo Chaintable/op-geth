@@ -95,8 +95,9 @@ func (e *NewPreconfTxRequest) SetStatus(statusBefore, status PreconfStatus) Prec
 }
 
 type PreconfResponse struct {
-	Receipt *types.Receipt
-	Err     error
+	Receipt    *types.Receipt
+	Err        error
+	ReturnData []byte
 }
 
 // NewTxsEvent is posted when a batch of transactions enter the transaction pool.
@@ -106,7 +107,9 @@ type NewTxsEvent struct{ Txs []*types.Transaction }
 type RemovedLogsEvent struct{ Logs []*types.Log }
 
 type ChainEvent struct {
-	Header *types.Header
+	Header       *types.Header
+	Receipts     []*types.Receipt
+	Transactions []*types.Transaction
 }
 
 type ChainHeadEvent struct {

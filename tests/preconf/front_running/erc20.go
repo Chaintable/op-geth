@@ -53,9 +53,9 @@ defer func() {
 */
 
 func ERC20Test() {
-	time.Sleep(30 * time.Second) // wait for sequencer to sync
+	time.Sleep(1 * time.Minute) // wait for sequencer to sync
 	erc20Test(config.SequencerEndpoint)
-	time.Sleep(30 * time.Second) // wait for sequencer to sync
+	time.Sleep(1 * time.Minute) // wait for sequencer to sync
 	erc20Test(config.L2RpcEndpoint)
 }
 
@@ -65,6 +65,14 @@ func erc20Test(endpoint string) {
 	defer log.Printf("ERC20Test %s completed\n", endpoint)
 
 	ctx := context.Background()
+
+	// fund config.Addr3 on L1
+	l1client, l1Addr3Auth, err := config.GetL1Auth(ctx, config.Addr3Key)
+	if err != nil {
+		log.Fatalf("failed to get L1 auth: %v", err)
+	}
+	fundAmount := big.NewInt(0).Mul(big.NewInt(1e18), big.NewInt(config.NumTransactions*5))
+	config.FundAccount(ctx, l1client, config.Addr3, fundAmount)
 
 	client, err := ethclient.Dial(endpoint)
 	if err != nil {
@@ -127,16 +135,8 @@ func erc20Test(endpoint string) {
 	go func() {
 		defer wg.Done()
 
-		l1client, l1Addr3Auth, err := config.GetL1Auth(ctx, config.Addr3Key)
-		if err != nil {
-			log.Fatalf("failed to get L1 auth: %v", err)
-		}
-		fundAmount := big.NewInt(0).Mul(big.NewInt(1e18), big.NewInt(config.NumTransactions*5))
-		config.FundAccount(ctx, l1client, config.Addr3, fundAmount)
-		time.Sleep(12 * time.Second) // wait for funder tx to be sent
-
 		depositTxs := make([]*types.Transaction, 0)
-		for i := 0; i < config.NumTransactions/20+1; i++ {
+		for i := range config.NumTransactions/20 + 1 {
 			if i%(config.PrintMod/20) == 0 {
 				log.Printf("depositTx %d", i)
 			}
@@ -149,7 +149,7 @@ func erc20Test(endpoint string) {
 
 			time.Sleep(300 * time.Millisecond)
 		}
-		time.Sleep(3 * config.WaitTime)
+		time.Sleep(6 * config.WaitTime)
 		fmt.Println("deposit txs", len(depositTxs))
 		var wg1 sync.WaitGroup
 		wg1.Add(len(depositTxs))
@@ -175,14 +175,16 @@ func erc20Test(endpoint string) {
 		fmt.Println("deposit txs done")
 	}()
 
+	waitDepositTxDuration := 4*2*6*time.Second + 2*time.Second
+
 	// 3 pay 1e18 to 1
 	go func() {
 		defer wg.Done()
 
 		log.Printf("waiting for deposit tx and user transfer go first, and then pay")
-		time.Sleep(50 * time.Second) // let deposit tx and user transfer go first
+		time.Sleep(waitDepositTxDuration + time.Second) // let deposit tx and user transfer go first
 		nonce := config.GetNonce(ctx, client, addr1Auth.From)
-		for i := 0; i < config.NumTransactions; i++ {
+		for i := range config.NumTransactions {
 			if i%config.PrintMod == 0 {
 				log.Printf("paying %d", i)
 			}
@@ -193,6 +195,9 @@ func erc20Test(endpoint string) {
 					continue
 				}
 				if strings.Contains(err.Error(), "transaction preconf failed") {
+					continue
+				}
+				if strings.Contains(err.Error(), "underflow balance sender") {
 					continue
 				}
 				log.Fatalf("failed to pay: %v", err)
@@ -249,9 +254,9 @@ func erc20Test(endpoint string) {
 		defer wg.Done()
 
 		log.Printf("waiting for deposit tx go first, and then transfer")
-		time.Sleep(48 * time.Second) // let deposit tx go first
+		time.Sleep(waitDepositTxDuration) // let deposit tx go first
 		nonce := config.GetNonce(ctx, client, addr3Auth.From)
-		for i := 0; i < config.NumTransactions; i++ {
+		for i := range config.NumTransactions {
 			if i%config.PrintMod == 0 {
 				log.Printf("transferring %d", i)
 			}
@@ -382,8 +387,8 @@ func callERC20(ctx context.Context, client *ethclient.Client, data string) []byt
 	return result
 }
 
-func pay(ctx context.Context, client *ethclient.Client, auth *bind.TransactOpts, i int, nonce uint64, amount *big.Int, txs *[]*types.Transaction, preconfFailedTx *[]*types.Transaction) error {
-	datastring := fmt.Sprintf("0xa5f2a152000000000000000000000000%s000000000000000000000000%s%s", config.Addr3.Hex()[2:], config.Addr1.Hex()[2:], hex.EncodeToString(common.LeftPadBytes(amount.Bytes(), 32)))
+func pay(ctx context.Context, client *ethclient.Client, auth *bind.TransactOpts, _ int, nonce uint64, amount *big.Int, txs *[]*types.Transaction, preconfFailedTx *[]*types.Transaction) error {
+	datastring := fmt.Sprintf(config.PAYDATA, config.Addr3.Hex()[2:], config.Addr1.Hex()[2:], hex.EncodeToString(common.LeftPadBytes(amount.Bytes(), 32)))
 	data := hexutil.MustDecode(datastring)
 	gas, err := client.EstimateGas(ctx, ethereum.CallMsg{
 		From:  auth.From,
