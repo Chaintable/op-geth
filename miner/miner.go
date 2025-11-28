@@ -186,10 +186,10 @@ func (miner *Miner) getPending() *newPayloadResult {
 	header := miner.chain.CurrentHeader()
 	miner.pendingMu.Lock()
 	defer miner.pendingMu.Unlock()
+
 	if cached := miner.pending.resolve(header.Hash()); cached != nil {
 		return cached
 	}
-
 	var (
 		timestamp  = uint64(time.Now().Unix())
 		withdrawal types.Withdrawals
@@ -213,4 +213,3 @@ func (miner *Miner) getPending() *newPayloadResult {
 	miner.pending.update(header.Hash(), ret)
 	return ret
 }
-

@@ -24,7 +24,7 @@ func (miner *Miner) preconfLoop() {
 				continue
 			}
 
-			receipt, err := miner.preconfChecker.Preconf(ev.Tx)
+			receipt, returnData, err := miner.preconfChecker.Preconf(ev.Tx)
 			if err != nil {
 				// Not fatal, just trace to the log
 				log.Trace("preconf failed", "tx", ev.Tx.Hash(), "err", err)
@@ -52,7 +52,7 @@ func (miner *Miner) preconfLoop() {
 			}
 
 			select {
-			case ev.PreconfResult <- &core.PreconfResponse{Receipt: receipt, Err: err}:
+			case ev.PreconfResult <- &core.PreconfResponse{Receipt: receipt, Err: err, ReturnData: returnData}:
 				log.Debug("worker sent preconf tx response", "tx", ev.Tx.Hash(), "duration", time.Since(now))
 			case <-time.After(time.Second):
 				log.Warn("preconf tx response timeout, preconf result is closed?", "tx", ev.Tx.Hash())

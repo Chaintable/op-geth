@@ -20,6 +20,7 @@ import (
 
 func StressTest() {
 	stress(config.SequencerEndpoint)
+	time.Sleep(config.WaitTime)
 	stress(config.L2RpcEndpoint)
 }
 

@@ -6,10 +6,10 @@ import (
 
 // Mantle chain config
 var (
-	MantleMainnetChainId  = big.NewInt(5000)
-	MantleSepoliaChainId  = big.NewInt(5003)
-	MantleHoodiQA3ChainId = big.NewInt(561113)
-	MantleLocalChainId    = big.NewInt(1337)
+	MantleMainnetChainId    = big.NewInt(5000)
+	MantleSepoliaChainId    = big.NewInt(5003)
+	MantleSepoliaQA6ChainId = big.NewInt(1115511106)
+	MantleLocalChainId      = big.NewInt(1337)
 )
 
 var (
@@ -22,6 +22,7 @@ var (
 		ProxyOwnerUpgradeTime: u64Ptr(1_742_367_600),
 		MantleEverestTime:     u64Ptr(1_742_367_600),
 		MantleSkadiTime:       u64Ptr(1_756_278_000),
+		MantleLimbTime:        nil,
 	}
 	MantleSepoliaUpgradeConfig = MantleUpgradeChainConfig{
 		ChainID:               MantleSepoliaChainId,
@@ -32,9 +33,10 @@ var (
 		ProxyOwnerUpgradeTime: nil,
 		MantleEverestTime:     u64Ptr(1_737_010_800),
 		MantleSkadiTime:       u64Ptr(1_752_649_200),
+		MantleLimbTime:        u64Ptr(1_764_745_200),
 	}
-	MantleHoodiQA3UpgradeConfig = MantleUpgradeChainConfig{
-		ChainID:               MantleHoodiQA3ChainId,
+	MantleSepoliaQA6UpgradeConfig = MantleUpgradeChainConfig{
+		ChainID:               MantleSepoliaQA6ChainId,
 		BaseFeeTime:           u64Ptr(0),
 		BVMETHMintUpgradeTime: u64Ptr(0),
 		MetaTxV2UpgradeTime:   u64Ptr(0),
@@ -42,6 +44,7 @@ var (
 		ProxyOwnerUpgradeTime: nil,
 		MantleEverestTime:     u64Ptr(0),
 		MantleSkadiTime:       u64Ptr(1_749_798_000),
+		MantleLimbTime:        u64Ptr(1_762_412_400),
 	}
 	MantleLocalUpgradeConfig = MantleUpgradeChainConfig{
 		ChainID:               MantleLocalChainId,
@@ -52,6 +55,7 @@ var (
 		ProxyOwnerUpgradeTime: nil,
 		MantleEverestTime:     u64Ptr(0),
 		MantleSkadiTime:       u64Ptr(0),
+		MantleLimbTime:        u64Ptr(0),
 	}
 	MantleDefaultUpgradeConfig = MantleUpgradeChainConfig{
 		BaseFeeTime:           u64Ptr(0),
@@ -61,6 +65,7 @@ var (
 		ProxyOwnerUpgradeTime: nil,
 		MantleEverestTime:     u64Ptr(0),
 		MantleSkadiTime:       u64Ptr(0),
+		MantleLimbTime:        u64Ptr(0),
 	}
 )
 
@@ -74,6 +79,7 @@ type MantleUpgradeChainConfig struct {
 	ProxyOwnerUpgradeTime *uint64 `json:"proxyOwnerUpgradeTime"` // ProxyOwnerUpgradeBlock identifies the current block time is ensuring the L2ProxyAdmin contract owner is set to NewProxyAdminOwnerAddress
 	MantleEverestTime     *uint64 `json:"mantleEverestTime"`     // MantleEverestTime identifies the current block time is ensuring eip-7212 & disable MetaTx
 	MantleSkadiTime       *uint64 `json:"mantleSkadiTime"`       // MantleSkadiTime identifies the current block time is ensuring prague upgrade
+	MantleLimbTime        *uint64 `json:"mantleLimbTime"`        // MantleLimbTime identifies the current block time is ensuring osaka upgrade
 }
 
 func GetUpgradeConfigForMantle(chainID *big.Int) *MantleUpgradeChainConfig {
@@ -85,8 +91,8 @@ func GetUpgradeConfigForMantle(chainID *big.Int) *MantleUpgradeChainConfig {
 		return &MantleMainnetUpgradeConfig
 	case MantleSepoliaChainId.Int64():
 		return &MantleSepoliaUpgradeConfig
-	case MantleHoodiQA3ChainId.Int64():
-		return &MantleHoodiQA3UpgradeConfig
+	case MantleSepoliaQA6ChainId.Int64():
+		return &MantleSepoliaQA6UpgradeConfig
 	case MantleLocalChainId.Int64():
 		return &MantleLocalUpgradeConfig
 	default:

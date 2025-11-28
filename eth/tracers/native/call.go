@@ -246,6 +246,10 @@ func (t *callTracer) OnLog(log *types.Log) {
 	if t.interrupt.Load() {
 		return
 	}
+	// mantle ETH deposit tx don't execute EVM call, skip add log
+	if len(t.callstack) == 0 {
+		return
+	}
 	l := callLog{
 		Address:  log.Address,
 		Topics:   log.Topics,
