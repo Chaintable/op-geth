@@ -33,7 +33,16 @@ func (bf *BlockFile) Validation() BlockValidation {
 		ids = append(ids, trace.ID)
 	}
 
-	return BlockValidation{ValidationHash: CalcValidationHash(ids), IsFork: false}
+	return BlockValidation{
+		ValidationHash:        CalcValidationHash(ids),
+		IsFork:                false,
+		TxsCount:              len(bf.Txs),
+		EventsCount:           len(bf.Events),
+		TracesCount:           len(bf.Traces),
+		ErrorEventsCount:      len(bf.ErrorEvents),
+		ErrorTracesCount:      len(bf.ErrorTraces),
+		StorageContractsCount: len(bf.StorageContracts),
+	}
 }
 
 func CalcValidationHash(ids []string) int64 {
@@ -56,8 +65,14 @@ func CalcValidationHash(ids []string) int64 {
 	return validationHash
 }
 
-// BlockValidation  { 'validation_hash': 12345678, is_fork: false }
+// BlockValidation  { 'validation_hash': 12345678, is_fork: false , 'txs_count': 10, 'events_count': 20, 'traces_count': 5, 'error_events_count': 1, 'error_traces_count': 0, 'storage_contracts_count': 2 }
 type BlockValidation struct {
-	ValidationHash int64 `json:"validation_hash"`
-	IsFork         bool  `json:"is_fork"`
+	ValidationHash        int64 `json:"validation_hash"`
+	IsFork                bool  `json:"is_fork"`
+	TxsCount              int   `json:"txs_count"`
+	EventsCount           int   `json:"events_count"`
+	TracesCount           int   `json:"traces_count"`
+	ErrorEventsCount      int   `json:"error_events_count"`
+	ErrorTracesCount      int   `json:"error_traces_count"`
+	StorageContractsCount int   `json:"storage_contracts_count"`
 }
