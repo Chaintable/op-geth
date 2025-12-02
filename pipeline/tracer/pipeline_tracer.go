@@ -42,6 +42,7 @@ type pipelineTracerConfig struct {
 	S3TempDir        string   `json:"s3_temp_dir"`
 	IsBackup         bool     `json:"is_backup"`
 	EnableStateDiff  bool     `json:"enable_state_diff"`
+	Version          string   `json:"version"`
 }
 
 func NewPipelineTracer(cfg json.RawMessage) (*PipelineTracer, error) {
@@ -60,7 +61,7 @@ func NewPipelineTracer(cfg json.RawMessage) (*PipelineTracer, error) {
 
 func (t *PipelineTracer) OnBlockchainInit(chainConfig *params.ChainConfig) {
 	log.Info("Init pipeline with param", "chainConfig", chainConfig.ChainID.String(), "config", t.config)
-	err := InitPipeline(t.config.Region, t.config.NodeXBucket, t.config.ChainTableBucket, t.config.Brokers, t.config.Topic, chainConfig.ChainID.String(), t.config.S3TempDir, t.config.IsBackup)
+	err := InitPipeline(t.config.Region, t.config.NodeXBucket, t.config.ChainTableBucket, t.config.Brokers, t.config.Topic, chainConfig.ChainID.String(), t.config.Version, t.config.S3TempDir, t.config.IsBackup)
 	if err != nil {
 		log.Crit("Failed to init pipeline", "err", err)
 	}
