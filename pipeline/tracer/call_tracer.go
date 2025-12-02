@@ -356,8 +356,8 @@ func (t *callTracer) addTraceAndLog(cf *callFrame, traceAddress []int64) {
 		}
 	}
 	for i := range cf.Calls {
-		if cf.failed() || cf.ParentFailed {
-			BlockCtx.BlockFile.ErrorTraces = append(BlockCtx.BlockFile.Traces, t.ToTrace(&cf.Calls[i], childTraceAddress(traceAddress, int64(i))))
+		if cf.Calls[i].failed() {
+			BlockCtx.BlockFile.ErrorTraces = append(BlockCtx.BlockFile.ErrorTraces, t.ToTrace(&cf.Calls[i], childTraceAddress(traceAddress, int64(i))))
 		} else {
 			BlockCtx.BlockFile.Traces = append(BlockCtx.BlockFile.Traces, t.ToTrace(&cf.Calls[i], childTraceAddress(traceAddress, int64(i))))
 		}
