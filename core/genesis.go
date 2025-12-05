@@ -612,6 +612,9 @@ func SetupGenesisBlockWithOverride(db ethdb.Database, triedb *triedb.Database, g
 			return nil, common.Hash{}, nil, err
 		}
 
+		// X Layer: Apply hardcoded fork times before committing genesis
+		genesis.Config = params.ApplyXLayerHardcodedForks(genesis.Config)
+
 		block, err := genesis.Commit(db, triedb)
 		if err != nil {
 			return nil, common.Hash{}, nil, err
@@ -627,6 +630,16 @@ func SetupGenesisBlockWithOverride(db ethdb.Database, triedb *triedb.Database, g
 	// fields. This scenario can occur when the node is created from scratch
 	// with an existing ancient store.
 	storedCfg := rawdb.ReadChainConfig(db, ghash)
+
+	// X Layer: Ensure hardcoded fork times are correctly stored in database.
+	if storedCfg != nil {
+		if err := EnsureXLayerHardcodedForksInDB(db, ghash); err != nil {
+			return nil, common.Hash{}, nil, err
+		}
+		// Re-read configuration after potential update
+		storedCfg = rawdb.ReadChainConfig(db, ghash)
+	}
+
 	if storedCfg == nil {
 		// OP-Stack note: a new chain, initialized with op-network CLI flag, hits this case.
 
@@ -642,6 +655,9 @@ func SetupGenesisBlockWithOverride(db ethdb.Database, triedb *triedb.Database, g
 		if err := overrides.apply(genesis.Config); err != nil {
 			return nil, common.Hash{}, nil, err
 		}
+
+		// X Layer: Apply hardcoded fork times before committing genesis
+		genesis.Config = params.ApplyXLayerHardcodedForks(genesis.Config)
 
 		if hash := genesis.ToBlock().Hash(); hash != ghash {
 			return nil, common.Hash{}, nil, &GenesisMismatchError{ghash, hash}
