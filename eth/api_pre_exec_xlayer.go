@@ -485,7 +485,7 @@ func applyMessageWithTracer(ctx context.Context, api *TxPreExecAPI, state *coreS
 		return nil, 0, nil, err
 	}
 
-	msg := txArgs.ToMessage(header.BaseFee, true, true)
+	msg := txArgs.ToMessage(header.BaseFee, true)
 	tx := txArgs.ToTransaction(types.LegacyTxType)
 
 	txHash := common.BigToHash(big.NewInt(int64(index)))
