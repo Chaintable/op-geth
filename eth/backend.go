@@ -113,6 +113,8 @@ type Ethereum struct {
 	shutdownTracker *shutdowncheck.ShutdownTracker // Tracks if and when the node has shutdown ungracefully
 
 	nodeCloser func() error
+
+	dataDir string
 }
 
 // New creates a new Ethereum object (including the initialisation of the common Ethereum object),
@@ -180,6 +182,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		discmix:           enode.NewFairMix(0),
 		shutdownTracker:   shutdowncheck.NewShutdownTracker(chainDb),
 		nodeCloser:        stack.Close,
+		dataDir:           stack.ResolvePath(""),
 	}
 	bcVersion := rawdb.ReadDatabaseVersion(chainDb)
 	dbVer := "<nil>"
@@ -463,6 +466,10 @@ func (s *Ethereum) APIs() []rpc.API {
 		{
 			Namespace: "eth",
 			Service:   celoapi.NewCeloAPI(s, celoBackend),
+		},
+		{
+			Namespace: "trace",
+			Service:   NewDebankAPI(s),
 		},
 	}...)
 }
