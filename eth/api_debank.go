@@ -27,15 +27,15 @@ import (
 	"github.com/holiman/uint256"
 )
 
-const MantleBedrockBlockNumber = 61171946
+const L2BlockNumber = 31056500
 
 type DebankAPI struct {
-	eth                    *Ethereum
-	mantleBedrockBlockData *DebankOutPut
-	dataReady              bool
-	preparing              bool
-	preparationError       error
-	mutex                  sync.RWMutex
+	eth              *Ethereum
+	l1Data           *DebankOutPut
+	dataReady        bool
+	preparing        bool
+	preparationError error
+	mutex            sync.RWMutex
 }
 
 func NewDebankAPI(eth *Ethereum) *DebankAPI {
@@ -100,11 +100,10 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 		}, nil
 	}
 
-	// If this is the Mantle bedrock block, use specialized handling
-	if block.NumberU64() == MantleBedrockBlockNumber {
+	if block.NumberU64() == L2BlockNumber {
 		// Trigger preparation if not ready and not preparing
 		if !api.dataReady && !api.preparing {
-			go api.prepareMantleBedrockData()
+			go api.prepareL1Data()
 		}
 
 		output, err := api.DebankBlockRaw(ctx, blockNrOrHash)
@@ -205,25 +204,25 @@ func (api *DebankAPI) DebankBlockRaw(ctx context.Context, blockNrOrHash rpc.Bloc
 		return nil, err
 	}
 
-	if block.NumberU64() != MantleBedrockBlockNumber {
-		return nil, fmt.Errorf("unsupported block number, only block %d is supported", MantleBedrockBlockNumber)
+	if block.NumberU64() != L2BlockNumber {
+		return nil, fmt.Errorf("unsupported block number, only block %d is supported", L2BlockNumber)
 	}
 
 	api.mutex.RLock()
 	defer api.mutex.RUnlock()
 
 	if !api.dataReady {
-		return nil, fmt.Errorf("Mantle bedrock block data is still preparing, please wait")
+		return nil, fmt.Errorf("l1 block data is still preparing, please wait")
 	}
 
 	if api.preparationError != nil {
-		return nil, fmt.Errorf("Mantle bedrock block data preparation failed: %w", api.preparationError)
+		return nil, fmt.Errorf("l1 block data preparation failed: %w", api.preparationError)
 	}
 
-	return api.mantleBedrockBlockData, nil
+	return api.l1Data, nil
 }
 
-func (api *DebankAPI) prepareMantleBedrockData() {
+func (api *DebankAPI) prepareL1Data() {
 	api.mutex.Lock()
 	if api.preparing {
 		api.mutex.Unlock()
@@ -241,28 +240,28 @@ func (api *DebankAPI) prepareMantleBedrockData() {
 		api.dataReady = true
 		api.preparationError = err
 		if output != nil {
-			api.mantleBedrockBlockData = output
+			api.l1Data = output
 		}
 		api.mutex.Unlock()
 
 		if err != nil {
-			log.Error("Mantle bedrock block data preparation failed", "blockNumber", MantleBedrockBlockNumber, "error", err)
+			log.Error("l1 block data preparation failed", "blockNumber", L2BlockNumber, "error", err)
 		} else {
-			log.Info("Mantle bedrock block data preparation completed", "blockNumber", MantleBedrockBlockNumber)
+			log.Info("l1 block data preparation completed", "blockNumber", L2BlockNumber)
 		}
 	}()
 
-	log.Info("Starting to prepare Mantle bedrock block data", "blockNumber", MantleBedrockBlockNumber)
+	log.Info("Starting to prepare l1 block data", "blockNumber", L2BlockNumber)
 
-	block := api.eth.blockchain.GetBlockByNumber(MantleBedrockBlockNumber)
+	block := api.eth.blockchain.GetBlockByNumber(L2BlockNumber)
 	if block == nil {
-		err = fmt.Errorf("failed to get Mantle bedrock block %d", MantleBedrockBlockNumber)
+		err = fmt.Errorf("failed to get l1 block %d", L2BlockNumber)
 		return
 	}
 
 	stateDB, dbErr := api.eth.blockchain.StateAt(block.Root())
 	if dbErr != nil {
-		err = fmt.Errorf("failed to get state at Mantle bedrock block: %w", dbErr)
+		err = fmt.Errorf("failed to get state at l1 block: %w", dbErr)
 		return
 	}
 
