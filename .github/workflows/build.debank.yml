@@ -66,4 +66,4 @@ jobs:
       - name: Lark Notification
         continue-on-error: true
         run: |
-          notiv3 "Blockchain bera image pushed 🎉" ${REGISTRY}/${IMAGE}:${REVISION}
+          notiv3 "Blockchain celo op-geth image pushed 🎉" ${REGISTRY}/${IMAGE}:${REVISION}
