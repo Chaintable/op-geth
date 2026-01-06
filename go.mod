@@ -7,7 +7,7 @@ toolchain go1.23.2
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.2.0
 	github.com/BurntSushi/toml v1.4.0
-	github.com/Chaintable/pipeline v0.0.59-op-v1.101511.1
+	github.com/Chaintable/pipeline v0.0.62-op-v1.101603.5
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/VictoriaMetrics/fastcache v1.12.2
 	github.com/aws/aws-sdk-go-v2 v1.32.5
@@ -20,7 +20,7 @@ require (
 	github.com/cespare/cp v0.1.0
 	github.com/cloudflare/cloudflare-go v0.79.0
 	github.com/cockroachdb/pebble v1.1.4
-	github.com/consensys/gnark-crypto v0.16.0
+	github.com/consensys/gnark-crypto v0.18.0
 	github.com/crate-crypto/go-eth-kzg v1.3.0
 	github.com/crate-crypto/go-ipa v0.0.0-20240724233137-53bbb0ceb27a
 	github.com/davecgh/go-spew v1.1.1
@@ -28,14 +28,14 @@ require (
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.3.0
 	github.com/donovanhide/eventsource v0.0.0-20210830082556-c59027999da0
 	github.com/dop251/goja v0.0.0-20230806174421-c933cf95e127
-	github.com/ethereum/c-kzg-4844/v2 v2.1.0
+	github.com/ethereum/c-kzg-4844/v2 v2.1.5
 	github.com/ethereum/go-verkle v0.2.2
 	github.com/fatih/color v1.13.0
 	github.com/ferranbt/fastssz v0.1.4
 	github.com/fjl/gencodec v0.0.0-20230517082657-f9840df7b83e
 	github.com/fsnotify/fsnotify v1.6.0
 	github.com/gballet/go-libpcsclite v0.0.0-20190607065134-2772fd86a8ff
-	github.com/gofrs/flock v0.8.1
+	github.com/gofrs/flock v0.12.1
 	github.com/golang-jwt/jwt/v4 v4.5.0
 	github.com/golang/snappy v0.0.5-0.20220116011046-fa5810519dcb
 	github.com/google/gofuzz v1.2.0
@@ -117,7 +117,6 @@ require (
 	github.com/cockroachdb/redact v1.1.5 // indirect
 	github.com/cockroachdb/tokenbucket v0.0.0-20230807174530-cc333fc44b06 // indirect
 	github.com/coder/websocket v1.8.12 // indirect
-	github.com/consensys/bavard v0.1.27 // indirect
 	github.com/coreos/go-semver v0.3.1 // indirect
 	github.com/coreos/go-systemd/v22 v22.5.0 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.2 // indirect
@@ -149,7 +148,6 @@ require (
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/mitchellh/mapstructure v1.4.1 // indirect
 	github.com/mitchellh/pointerstructure v1.2.0 // indirect
-	github.com/mmcloughlin/addchain v0.4.0 // indirect
 	github.com/naoina/go-stringutil v0.1.0 // indirect
 	github.com/opentracing/opentracing-go v1.1.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.21 // indirect
@@ -182,7 +180,6 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20231016165738-49dd2c1f3d0b // indirect
 	google.golang.org/grpc v1.59.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	rsc.io/tmplfunc v0.0.3 // indirect
 )
 
 // Excludes to work around genproto conflicts between op-geth and heminetwork dependencies
