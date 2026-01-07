@@ -30,6 +30,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/log"
 	ptypes "github.com/ethereum/go-ethereum/pipeline/types"
 	"github.com/ethereum/go-ethereum/pipeline/util"
 )
@@ -254,6 +255,20 @@ func (t *callTracer) OnTxStart(vmContext *tracing.VMContext, tx *types.Transacti
 func (t *callTracer) OnTxEnd(receipt *types.Receipt, err error) {
 	// Error happened during tx validation.
 	if err != nil {
+		return
+	}
+	// If callstack is empty, it means the transaction never entered EVM execution
+	// (e.g., failed during preCheck or intrinsic gas validation for deposit tx).
+	// No trace should be generated in this case.
+	if len(t.callstack) == 0 {
+		if BlockCtx != nil && BlockCtx.Tx != nil {
+			log.Warn("Transaction completed without EVM execution, no trace generated",
+				"blockNumber", BlockCtx.BlockNumber,
+				"blockHash", BlockCtx.BlockHash.Hex(),
+				"txHash", BlockCtx.Tx.Hash().Hex(),
+				"txType", BlockCtx.Tx.Type(),
+			)
+		}
 		return
 	}
 	setParentFailed(&t.callstack[0], false)
