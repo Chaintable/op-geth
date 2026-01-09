@@ -3063,9 +3063,10 @@ func (bc *BlockChain) GetHeaderByHash2(blockHash common.Hash) *types.Header {
 	if header == nil {
 		if tracer.NodeXPusher != nil {
 			header := &types.Header{}
-			err := util.DownloadFileFromS3Json(tracer.NodeXPusher.Uploader, tracer.NodeXPusher.Bucket, fmt.Sprintf("%s/%s/block", tracer.BizChainID, blockHash.String()), header)
+			key := fmt.Sprintf("%s/%s/block", tracer.BizChainID, blockHash.String())
+			err := util.DownloadFileFromS3Json(tracer.NodeXPusher.Uploader, tracer.NodeXPusher.Bucket, key, header)
 			if err != nil {
-				log.Error("GetHeaderByHash2 DownloadFileFromS3Json error", "err", err)
+				log.Error("GetHeaderByHash2 DownloadFileFromS3Json error", "err", err, "key", key, "bucket", tracer.NodeXPusher.Bucket)
 				return nil
 			} else {
 				return header
