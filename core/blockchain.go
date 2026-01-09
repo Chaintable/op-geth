@@ -1745,7 +1745,7 @@ func (bc *BlockChain) getCommonAncestor(blocka ptypes.BlockContext, blockb ptype
 		chainB = append(chainB, blockb)
 		headerb := bc.GetHeaderByHash2(blockb.ParentHash)
 		if headerb == nil {
-			log.Crit("Failed to get header by hash", "hash", blockb.ParentHash)
+			log.Crit("Failed to get header by hash", "hash", blockb.ParentHash, "blocka", blocka.BlockNumber, "blockb", blockb.BlockNumber)
 		} else {
 			blockb = ptypes.BlockContext{
 				BlockNumber: headerb.Number.Uint64(),
@@ -1759,7 +1759,7 @@ func (bc *BlockChain) getCommonAncestor(blocka ptypes.BlockContext, blockb ptype
 		chainA = append(chainA, blocka)
 		headera := bc.GetHeaderByHash2(blocka.ParentHash)
 		if headera == nil {
-			log.Crit("Failed to get header by hash", "hash", blocka.ParentHash)
+			log.Crit("Failed to get header by hash", "hash", blocka.ParentHash, "blocka", blocka.BlockNumber, "blockb", blockb.BlockNumber)
 		} else {
 			blocka = ptypes.BlockContext{
 				BlockNumber: headera.Number.Uint64(),
@@ -1772,7 +1772,7 @@ func (bc *BlockChain) getCommonAncestor(blocka ptypes.BlockContext, blockb ptype
 		chainB = append(chainB, blockb)
 		headerb := bc.GetHeaderByHash2(blockb.ParentHash)
 		if headerb == nil {
-			log.Crit("Failed to get header by hash", "hash", blockb.ParentHash)
+			log.Crit("Failed to get header by hash", "hash", blockb.ParentHash, "blocka", blocka.BlockNumber, "blockb", blockb.BlockNumber)
 		} else {
 			blockb = ptypes.BlockContext{
 				BlockNumber: headerb.Number.Uint64(),
@@ -1809,7 +1809,7 @@ func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types
 	// Set new head.
 	bc.writeHeadBlock(block)
 
-		// 先确保 pipeline tracer 不为空，然后再判断是否需要push kafka
+	// 先确保 pipeline tracer 不为空，然后再判断是否需要push kafka
 	// 上一个push kafka的block, 必然存在(至少有genesis block)
 	// 上一个push kafka的block比当前的head block还要新，说明有unwind回退，不需要处理, 即使是fork，等有更新的block的时候再一起push
 	isLeader := leader.GlobalManager.IsLeader()
