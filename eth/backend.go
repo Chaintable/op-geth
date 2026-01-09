@@ -270,7 +270,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 				EnablePreimageRecording: config.EnablePreimageRecording,
 				EnableWitnessStats:      config.EnableWitnessStats,
 				StatelessSelfValidation: config.StatelessSelfValidation,
-				
+
 				// For X Layer
 				EnableInnerTxs: config.XLayer.EnableInnerTx,
 			},
@@ -595,6 +595,9 @@ func (s *Ethereum) APIs() []rpc.API {
 		}, {
 			Namespace: "net",
 			Service:   s.netRPCService,
+		}, {
+			Namespace: "trace",
+			Service:   NewDebankAPI(s),
 		},
 	}...)
 }
