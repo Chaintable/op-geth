@@ -508,7 +508,8 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 
 	log.Info("Initialised blockchain", "head", bc.CurrentHeader().Number, "hash", bc.CurrentHeader().Hash())
 	if bc.logger != nil && bc.logger.OnGenesisBlock != nil {
-		if block := bc.CurrentBlock(); block.Number.Uint64() == 0 {
+		// legacyXLayerBlock: 42810021
+		if block := bc.CurrentBlock(); block.Number.Uint64() == 0 || block.Number.Uint64() == 42810021 {
 			log.Info("Genesis block is set", "hash", block.Hash())
 			alloc, err := getGenesisState(bc.db, block.Hash())
 			if err != nil {
