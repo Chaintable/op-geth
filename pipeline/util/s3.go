@@ -5,19 +5,28 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/smithy-go"
+	"github.com/ethereum/go-ethereum/log"
 )
 
 func NewS3Client(region string) (*s3.Client, error) {
-	cfg, err := config.LoadDefaultConfig(context.TODO())
+	log.Info("Init S3 client: load config", "region", region)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			log.Error("Init S3 client: load config timeout", "region", region)
+		}
 		return nil, err
 	}
 	cfg.Region = region
+	log.Info("Init S3 client: load config done", "region", region)
 	client := s3.NewFromConfig(cfg)
 	return client, nil
 }

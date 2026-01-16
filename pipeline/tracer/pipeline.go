@@ -42,16 +42,22 @@ var (
 )
 
 func InitPipeline(region string, nodeXBucket string, chainTableBucket string, brokers []string, topic string, bizChainID string, version string, s3TmpDir string, isBackup bool) (err error) {
+	log.Info("InitPipeline start", "region", region, "nodeXBucket", nodeXBucket, "chainTableBucket", chainTableBucket, "topic", topic, "s3TmpDir", s3TmpDir, "isBackup", isBackup)
+	log.Info("InitPipeline init NodeX pusher")
 	NodeXPusher, err = processor.NewPushProcessor(region, nodeXBucket, brokers, topic, s3TmpDir, isBackup)
 	if err != nil {
 		return err
 	}
+	log.Info("InitPipeline init NodeX pusher done")
+	log.Info("InitPipeline init ChainTable pusher")
 	ChainTableBucketPusher, err = processor.NewPushProcessor(region, chainTableBucket, brokers, topic, s3TmpDir, isBackup)
 	if err != nil {
 		return err
 	}
+	log.Info("InitPipeline init ChainTable pusher done")
 	BizChainID = bizChainID
 	Version = version
+	log.Info("InitPipeline done")
 	return nil
 }
 
