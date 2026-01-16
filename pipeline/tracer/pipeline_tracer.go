@@ -61,10 +61,12 @@ func NewPipelineTracer(cfg json.RawMessage) (*PipelineTracer, error) {
 
 func (t *PipelineTracer) OnBlockchainInit(chainConfig *params.ChainConfig) {
 	log.Info("Init pipeline with param", "chainConfig", chainConfig.ChainID.String(), "config", t.config)
+	start := time.Now()
 	err := InitPipeline(t.config.Region, t.config.NodeXBucket, t.config.ChainTableBucket, t.config.Brokers, t.config.Topic, chainConfig.ChainID.String(), t.config.Version, t.config.S3TempDir, t.config.IsBackup)
 	if err != nil {
 		log.Crit("Failed to init pipeline", "err", err)
 	}
+	log.Info("Init pipeline done", "elapsed", common.PrettyDuration(time.Since(start)))
 	metrics.NodeInfo.Update(map[string]string{
 		"chain_id": chainConfig.ChainID.String(),
 		"role":     "writer",

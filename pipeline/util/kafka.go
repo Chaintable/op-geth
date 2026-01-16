@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/ethereum/go-ethereum/pipeline/types"
 	"github.com/segmentio/kafka-go"
@@ -20,10 +21,18 @@ func NewKafkaReader(brokers []string, topic string, groupID string) *kafka.Reade
 // 获取最后一个BlockChangeNotification
 func GetLastBlockNotice(reader *kafka.Reader) (*types.BlockChangeNotification, error) {
 	reader.SetOffset(0)
-	lag, err := reader.ReadLag(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	lag, err := reader.ReadLag(ctx)
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			fmt.Printf("kafka ReadLag timeout after %s\n", time.Since(start))
+			return nil, nil
+		}
 		return nil, err
 	}
+	fmt.Printf("kafka ReadLag ok: lag=%d elapsed=%s\n", lag, time.Since(start))
 	if lag == 0 {
 		return nil, nil
 	}
@@ -33,10 +42,18 @@ func GetLastBlockNotice(reader *kafka.Reader) (*types.BlockChangeNotification, e
 		return nil, err
 	}
 
-	msg, err := reader.ReadMessage(context.Background())
+	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start = time.Now()
+	msg, err := reader.ReadMessage(ctx)
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			fmt.Printf("kafka ReadMessage timeout after %s\n", time.Since(start))
+			return nil, nil
+		}
 		return nil, err
 	}
+	fmt.Printf("kafka ReadMessage ok: key=%s elapsed=%s\n", string(msg.Key), time.Since(start))
 
 	if !bytes.Equal(msg.Key, []byte("NewBlock")) {
 		return nil, fmt.Errorf("last message is not NewBlock")

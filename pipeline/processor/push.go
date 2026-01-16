@@ -30,6 +30,7 @@ type PushProcessor struct {
 }
 
 func NewPushProcessor(region string, bucket string, brokers []string, topic string, s3TempDir string, isBackup bool) (*PushProcessor, error) {
+	log.Printf("init push processor start: region=%s bucket=%s topic=%s brokers=%v s3TempDir=%s isBackup=%v\n", region, bucket, topic, brokers, s3TempDir, isBackup)
 	kafkaReader := util.NewKafkaReader(brokers, topic, "")
 	kafkaWriter := util.NewKafkaWriter(brokers, topic)
 	s3Uploader, err := util.NewS3Client(region)
@@ -50,6 +51,7 @@ func NewPushProcessor(region string, bucket string, brokers []string, topic stri
 	if s3TempDir != "" {
 		s3TempDir = filepath.Join(s3TempDir, bucket)
 	}
+	log.Printf("init push processor resolved s3TempDir: %s\n", s3TempDir)
 
 	pusher := &PushProcessor{
 		Bucket:          bucket,
@@ -68,6 +70,7 @@ func NewPushProcessor(region string, bucket string, brokers []string, topic stri
 			return nil, err
 		}
 	}
+	log.Printf("init push processor done: bucket=%s\n", bucket)
 	return pusher, nil
 }
 
