@@ -402,7 +402,7 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 	bc.statedb = state.NewDatabase(bc.triedb, nil)
 	bc.validator = NewBlockValidator(chainConfig, bc)
 	bc.prefetcher = newStatePrefetcher(chainConfig, bc.hc)
-	bc.processor = NewStateProcessor(chainConfig, bc.hc)
+	bc.processor = NewStateProcessor(bc.hc)
 
 	genesisHeader := bc.GetHeaderByNumber(0)
 	if genesisHeader == nil {
@@ -1806,9 +1806,12 @@ func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types
 			log.Info("NodeXPusher PushBlockChangeNotification", "blockChange", blockChange)
 		}
 	}
+	bc.chainFeed.Send(ChainEvent{
+		Header:       block.Header(),
+		Receipts:     receipts,
+		Transactions: block.Transactions(),
+	})
 
-	// bc.chainFeed.Send(ChainEvent{Block: block, Hash: block.Hash(), Logs: logs})
-	bc.chainFeed.Send(ChainEvent{Header: block.Header()})
 	if len(logs) > 0 {
 		bc.logsFeed.Send(logs)
 	}
@@ -2460,6 +2463,13 @@ func (bc *BlockChain) recoverAncestors(block *types.Block, makeWitness bool) (co
 // collectLogs collects the logs that were generated or removed during the
 // processing of a block. These logs are later announced as deleted or reborn.
 func (bc *BlockChain) collectLogs(b *types.Block, removed bool) []*types.Log {
+	_, logs := bc.collectReceiptsAndLogs(b, removed)
+	return logs
+}
+
+// collectReceiptsAndLogs retrieves receipts from the database and returns both receipts and logs.
+// This avoids duplicate database reads when both are needed.
+func (bc *BlockChain) collectReceiptsAndLogs(b *types.Block, removed bool) ([]*types.Receipt, []*types.Log) {
 	var blobGasPrice *big.Int
 	if b.ExcessBlobGas() != nil {
 		blobGasPrice = eip4844.CalcBlobFee(bc.chainConfig, b.Header())
@@ -2477,7 +2487,7 @@ func (bc *BlockChain) collectLogs(b *types.Block, removed bool) []*types.Log {
 			logs = append(logs, log)
 		}
 	}
-	return logs
+	return receipts, logs
 }
 
 // reorg takes two blocks, an old chain and a new chain and will reconstruct the
@@ -2753,8 +2763,14 @@ func (bc *BlockChain) SetCanonical(head *types.Block) (common.Hash, error) {
 		log.Debug("SetCanonical NodeXPusher is nil or LastBlockNotice.NewBlocks[0].BlockNumber <= block.NumberU64()")
 	}
 	// Emit events
-	logs := bc.collectLogs(head, false)
-	bc.chainFeed.Send(ChainEvent{Header: head.Header()})
+	receipts, logs := bc.collectReceiptsAndLogs(head, false)
+
+	bc.chainFeed.Send(ChainEvent{
+		Header:       head.Header(),
+		Receipts:     receipts,
+		Transactions: head.Transactions(),
+	})
+
 	if len(logs) > 0 {
 		bc.logsFeed.Send(logs)
 	}
