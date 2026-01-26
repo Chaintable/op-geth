@@ -2,6 +2,7 @@ package frxusd
 
 import (
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
@@ -15,9 +16,9 @@ func RunTestnetMigration(c *params.ChainConfig, timestamp uint64, db vm.StateDB)
 	for _, i := range testnetFrxUSDL1TokenReplacementIndexes {
 		copy(frxUSDImplementationCode[i:], frxUSDL1Token)
 	}
-	db.SetCode(frxUSDImplementationAddress, frxUSDImplementationCode)
+	db.SetCode(frxUSDImplementationAddress, frxUSDImplementationCode, tracing.CodeChangeUnspecified)
 	log.Info("Setting frxUSD proxy", "address", frxUSDAddress)
-	db.SetCode(frxUSDAddress, proxyCode)
+	db.SetCode(frxUSDAddress, proxyCode, tracing.CodeChangeUnspecified)
 	log.Info("Setting frxUSD storage variables", "address", frxUSDAddress)
 	db.SetState(frxUSDAddress, frxUSDProxyAdminSlot, common.BytesToHash(common.LeftPadBytes(frxUSDProxyAdminAddress.Bytes(), common.HashLength)))
 	db.SetState(frxUSDAddress, frxUSDProxyImplementationSlot, common.BytesToHash(common.LeftPadBytes(frxUSDImplementationAddress.Bytes(), common.HashLength)))
