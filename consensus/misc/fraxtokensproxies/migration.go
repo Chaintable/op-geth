@@ -2,6 +2,7 @@ package fraxtokensproxies
 
 import (
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
@@ -29,8 +30,8 @@ func RunMigration(c *params.ChainConfig, timestamp uint64, db vm.StateDB) {
 	for _, addr := range tokensAddresses {
 		implementationAddress := addr
 		copy(implementationAddress[:4], []byte{252, 192, 211})
-		db.SetCode(implementationAddress, db.GetCode(addr))
-		db.SetCode(addr, proxyCode)
+		db.SetCode(implementationAddress, db.GetCode(addr), tracing.CodeChangeUnspecified)
+		db.SetCode(addr, proxyCode, tracing.CodeChangeUnspecified)
 		db.SetState(addr, proxyAdminSlot, common.BytesToHash(common.LeftPadBytes(proxyAdminAddress.Bytes(), common.HashLength)))
 		db.SetState(addr, proxyImplementationSlot, common.BytesToHash(common.LeftPadBytes(implementationAddress.Bytes(), common.HashLength)))
 	}
@@ -38,7 +39,7 @@ func RunMigration(c *params.ChainConfig, timestamp uint64, db vm.StateDB) {
 	for _, c := range bytecodeChanges {
 		originalCode := db.GetCode(c.address)
 		copy(originalCode[c.offset:], c.value)
-		db.SetCode(c.address, originalCode)
+		db.SetCode(c.address, originalCode, tracing.CodeChangeUnspecified)
 	}
 
 	for _, c := range storageChanges {

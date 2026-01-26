@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/tracing"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
 )
@@ -93,7 +94,7 @@ func (s *stateDb) GetCodeSize(addr common.Address) int {
 	return len(s.codeMap[addr])
 }
 
-func (s *stateDb) SetCode(addr common.Address, code []byte) []byte {
+func (s *stateDb) SetCode(addr common.Address, code []byte, _ tracing.CodeChangeReason) []byte {
 	s.initCodeMap()
 	s.codeMap[addr] = code
 	return nil
