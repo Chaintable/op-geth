@@ -14,12 +14,9 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus/misc"
 	"github.com/ethereum/go-ethereum/core"
-	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/tracing"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/eth/tracers"
-	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 )
@@ -264,58 +261,13 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 		Stop:      rpcTracer.Stop,
 		GetResult: rpcTracer.GetResult,
 	}
-	tracingStateDB := state.NewHookedState(statedb, tracer.Hooks)
-	blockCtx := core.NewEVMBlockContext(block.Header(), ethapi.NewChainContext(ctx, api.eth.APIBackend), nil, config, statedb)
-	evm := vm.NewEVM(blockCtx, tracingStateDB, config, vm.Config{Tracer: tracer.Hooks})
 
 	rpcTracer.OnBlockStart(block)
 
-	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
-		core.ProcessBeaconBlockRoot(*beaconRoot, evm)
-	}
-	if config.IsPrague(block.Number(), block.Time()) || config.IsVerkle(block.Number(), block.Time()) {
-		core.ProcessParentBlockHash(block.ParentHash(), evm)
-	}
-	var (
-		txs       = block.Transactions()
-		signer    = types.MakeSigner(config, block.Number(), block.Time())
-		gp        = new(core.GasPool).AddGas(block.GasLimit())
-		usedGas   = new(uint64)
-		allLogs   []*types.Log
-		blockHash = block.Hash()
-	)
-
-	for i, tx := range txs {
-		msg, err := core.TransactionToMessage(tx, signer, blockCtx.BaseFee)
-		if err != nil {
-			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
-		}
-		statedb.SetTxContext(tx.Hash(), i)
-
-		receipt, err := core.ApplyTransactionWithEVM(msg, gp, statedb, block.Number(), blockHash, blockCtx.Time, tx, usedGas, evm)
-		if err != nil {
-			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
-		}
-		allLogs = append(allLogs, receipt.Logs...)
-	}
-
-	isIsthmus := config.IsIsthmus(block.Time())
-
-	// Read requests if Prague is enabled.
-	if config.IsPrague(block.Number(), block.Time()) && !isIsthmus {
-		// EIP-6110
-		var requests [][]byte
-		if err := core.ParseDepositLogs(&requests, allLogs, config); err != nil {
-			return nil, fmt.Errorf("failed to parse deposit logs: %w", err)
-		}
-		// EIP-7002
-		if err := core.ProcessWithdrawalQueue(&requests, evm); err != nil {
-			return nil, fmt.Errorf("failed to process withdrawal queue: %w", err)
-		}
-		// EIP-7251
-		if err := core.ProcessConsolidationQueue(&requests, evm); err != nil {
-			return nil, fmt.Errorf("failed to process consolidation queue: %w", err)
-		}
+	// Process the block using the standard processor
+	_, err = api.eth.BlockChain().Processor().Process(block, statedb, vm.Config{Tracer: tracer.Hooks})
+	if err != nil {
+		return nil, fmt.Errorf("could not process block: %w", err)
 	}
 
 	root, destructs, accounts, storages, codes, err := statedb.StateDiff(config.IsEIP158(block.Number()))
