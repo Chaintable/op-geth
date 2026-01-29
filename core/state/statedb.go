@@ -36,6 +36,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/ethereum/go-ethereum/trie/trienode"
 	"github.com/ethereum/go-ethereum/trie/triestate"
@@ -1811,4 +1812,51 @@ func copy2DSet[k comparable](set map[k]map[common.Hash][]byte) map[k]map[common.
 		}
 	}
 	return copied
+}
+
+// StateDiff returns the state diff for RPC tracing without committing.
+func (s *StateDB) StateDiff(deleteEmptyObjects bool) (common.Hash, map[common.Hash]struct{}, map[common.Hash][]byte, map[common.Hash]map[common.Hash][]byte, map[common.Hash][]byte, error) {
+	root := s.IntermediateRoot(deleteEmptyObjects)
+
+	destructs := make(map[common.Hash]struct{})
+	accounts := make(map[common.Hash][]byte)
+	storages := make(map[common.Hash]map[common.Hash][]byte)
+	codes := make(map[common.Hash][]byte)
+
+	encode := func(val common.Hash) []byte {
+		if val == (common.Hash{}) {
+			return nil
+		}
+		blob, _ := rlp.EncodeToBytes(common.TrimLeftZeroes(val[:]))
+		return blob
+	}
+
+	for addr := range s.stateObjectsDirty {
+		obj := s.stateObjects[addr]
+		if obj == nil {
+			continue
+		}
+		addrHash := crypto.Keccak256Hash(addr.Bytes())
+		if !obj.deleted {
+			if obj.code != nil && obj.dirtyCode {
+				codes[common.BytesToHash(obj.CodeHash())] = obj.code
+			}
+			abuf, err := rlp.EncodeToBytes(obj.data)
+			if err != nil {
+				return common.Hash{}, nil, nil, nil, nil, fmt.Errorf("can't encode object at %s: %v", addr.Hex(), err)
+			}
+			accounts[addrHash] = abuf
+			for key, val := range obj.commitStorage {
+				hash := crypto.Keccak256Hash(key[:])
+				if _, ok := storages[addrHash]; !ok {
+					storages[addrHash] = make(map[common.Hash][]byte)
+				}
+				storages[addrHash][hash] = encode(val)
+			}
+		} else {
+			destructs[addrHash] = struct{}{}
+		}
+	}
+
+	return root, destructs, accounts, storages, codes, nil
 }
