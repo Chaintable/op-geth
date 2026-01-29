@@ -3,12 +3,16 @@ package eth
 import (
 	"context"
 	"fmt"
+	"math/big"
+	"sort"
 	"strings"
 
 	ptracer "github.com/Chaintable/pipeline/tracer"
 	ptypes "github.com/Chaintable/pipeline/types"
 	"github.com/Chaintable/pipeline/util"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/consensus/misc"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/tracing"
@@ -52,11 +56,167 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 			ErrorTraces:      make([]ptypes.Trace, 0),
 			StorageContracts: make([]string, 0),
 		}
-		for addr, account := range genesis.Alloc {
+
+		// 构造 genesis tx 和 trace
+		zeroAddr := "0x0000000000000000000000000000000000000000"
+		txIdx := int64(0)
+
+		// 对地址排序，确保遍历顺序确定性
+		sortedAddrs := make([]common.Address, 0, len(genesis.Alloc))
+		for addr := range genesis.Alloc {
+			sortedAddrs = append(sortedAddrs, addr)
+		}
+		sort.Slice(sortedAddrs, func(i, j int) bool {
+			return sortedAddrs[i].Hex() < sortedAddrs[j].Hex()
+		})
+
+		for _, addr := range sortedAddrs {
+			account := genesis.Alloc[addr]
+			addrLower := strings.ToLower(addr.Hex())
+
+			// 处理有 Storage 的账户
 			if len(account.Storage) > 0 {
-				blockFile.StorageContracts = append(blockFile.StorageContracts, strings.ToLower(addr.Hex()))
+				blockFile.StorageContracts = append(blockFile.StorageContracts, addrLower)
+			}
+
+			// 处理有 balance 的账户 - 构造转账 tx 和 call trace
+			if account.Balance != nil && account.Balance.Sign() > 0 {
+				// tx id: 0xgenesis01 + 13个0 + 地址(42字符) = 66字符
+				txID := fmt.Sprintf("0xgenesis01%013d%s", 0, addrLower)
+
+				tx := ptypes.Transaction{
+					ID:               txID,
+					From:             zeroAddr,
+					To:               addrLower,
+					Gas:              big.NewInt(0),
+					GasPrice:         big.NewInt(0),
+					GasUsed:          big.NewInt(0),
+					Status:           true,
+					GasFeeCap:        big.NewInt(0),
+					GasTipCap:        big.NewInt(0),
+					Input:            []byte{},
+					Nonce:            big.NewInt(0),
+					TransactionIndex: txIdx,
+					Value:            (*hexutil.Big)(account.Balance),
+				}
+				blockFile.Txs = append(blockFile.Txs, tx)
+
+				// trace id = hash(tx_id, parent_trace_id, pos_in_parent_trace)
+				traceID := util.ToHash([]string{txID, "", "0"})
+				trace := ptypes.Trace{
+					ID:                traceID,
+					From:              zeroAddr,
+					Gas:               big.NewInt(0),
+					Input:             []byte{},
+					To:                addrLower,
+					Value:             (*hexutil.Big)(account.Balance),
+					GasUsed:           big.NewInt(0),
+					Output:            []byte{},
+					CallCreateType:    "call",
+					CallType:          "call",
+					TxID:              txID,
+					ParentTraceID:     "",
+					PosInParentTrace:  0,
+					SelfStorageChange: false,
+					StorageChange:     false,
+					Subtraces:         0,
+					TraceAddress:      []int64{},
+				}
+				blockFile.Traces = append(blockFile.Traces, trace)
+				txIdx++
+			}
+
+			// 处理有 code 的账户 - 构造 create tx 和 create trace
+			if len(account.Code) > 0 {
+				// tx id: 0xgenesis02 + 13个0 + 地址(42字符) = 66字符
+				txID := fmt.Sprintf("0xgenesis02%013d%s", 0, addrLower)
+
+				tx := ptypes.Transaction{
+					ID:               txID,
+					From:             zeroAddr,
+					To:               addrLower,
+					Gas:              big.NewInt(0),
+					GasPrice:         big.NewInt(0),
+					GasUsed:          big.NewInt(0),
+					Status:           true,
+					GasFeeCap:        big.NewInt(0),
+					GasTipCap:        big.NewInt(0),
+					Input:            account.Code,
+					Nonce:            big.NewInt(0),
+					TransactionIndex: txIdx,
+					Value:            (*hexutil.Big)(big.NewInt(0)),
+				}
+				blockFile.Txs = append(blockFile.Txs, tx)
+
+				// trace id = hash(tx_id, parent_trace_id, pos_in_parent_trace)
+				traceID := util.ToHash([]string{txID, "", "0"})
+				trace := ptypes.Trace{
+					ID:                traceID,
+					From:              zeroAddr,
+					Gas:               big.NewInt(0),
+					Input:             account.Code,
+					To:                addrLower,
+					Value:             (*hexutil.Big)(big.NewInt(0)),
+					GasUsed:           big.NewInt(0),
+					Output:            account.Code, // output 直接使用 input (code)
+					CallCreateType:    "create",
+					CallType:          "",
+					TxID:              txID,
+					ParentTraceID:     "",
+					PosInParentTrace:  0,
+					SelfStorageChange: false,
+					StorageChange:     false,
+					Subtraces:         0,
+					TraceAddress:      []int64{},
+				}
+				blockFile.Traces = append(blockFile.Traces, trace)
+				txIdx++
 			}
 		}
+
+		// 添加原生代币合约创建 tx 和 trace (E地址)
+		nativeTokenAddr := "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+		nativeTokenTxID := fmt.Sprintf("0xgenesis03%013d%s", 0, nativeTokenAddr)
+
+		nativeTokenTx := ptypes.Transaction{
+			ID:               nativeTokenTxID,
+			From:             zeroAddr,
+			To:               nativeTokenAddr,
+			Gas:              big.NewInt(0),
+			GasPrice:         big.NewInt(0),
+			GasUsed:          big.NewInt(0),
+			Status:           true,
+			GasFeeCap:        big.NewInt(0),
+			GasTipCap:        big.NewInt(0),
+			Input:            []byte{},
+			Nonce:            big.NewInt(0),
+			TransactionIndex: txIdx,
+			Value:            (*hexutil.Big)(big.NewInt(0)),
+		}
+		blockFile.Txs = append(blockFile.Txs, nativeTokenTx)
+
+		nativeTokenTraceID := util.ToHash([]string{nativeTokenTxID, "", "0"})
+		nativeTokenTrace := ptypes.Trace{
+			ID:                nativeTokenTraceID,
+			From:              zeroAddr,
+			Gas:               big.NewInt(0),
+			Input:             []byte{},
+			To:                nativeTokenAddr,
+			Value:             (*hexutil.Big)(big.NewInt(0)),
+			GasUsed:           big.NewInt(0),
+			Output:            []byte{},
+			CallCreateType:    "create",
+			CallType:          "",
+			TxID:              nativeTokenTxID,
+			ParentTraceID:     "",
+			PosInParentTrace:  0,
+			SelfStorageChange: false,
+			StorageChange:     false,
+			Subtraces:         0,
+			TraceAddress:      []int64{},
+		}
+		blockFile.Traces = append(blockFile.Traces, nativeTokenTrace)
+
 		var stateDiffBytes []byte
 		if blockDiff != nil {
 			stateDiffBytes, err = util.EncodeToRlp(blockDiff)
@@ -86,6 +246,11 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 	}
 	defer release()
 
+	config := api.eth.APIBackend.ChainConfig()
+
+	// Mutate the block and state according to any hard-fork specs
+	misc.EnsureCreate2Deployer(config, block.Time(), statedb)
+
 	rpcTracer := ptracer.RPCTracer{}
 	tracer := &tracers.Tracer{
 		Hooks: &tracing.Hooks{
@@ -100,22 +265,24 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 		GetResult: rpcTracer.GetResult,
 	}
 	tracingStateDB := state.NewHookedState(statedb, tracer.Hooks)
-	blockCtx := core.NewEVMBlockContext(block.Header(), ethapi.NewChainContext(ctx, api.eth.APIBackend), nil, api.eth.APIBackend.ChainConfig(), statedb)
-	evm := vm.NewEVM(blockCtx, tracingStateDB, api.eth.APIBackend.ChainConfig(), vm.Config{Tracer: tracer.Hooks})
+	blockCtx := core.NewEVMBlockContext(block.Header(), ethapi.NewChainContext(ctx, api.eth.APIBackend), nil, config, statedb)
+	evm := vm.NewEVM(blockCtx, tracingStateDB, config, vm.Config{Tracer: tracer.Hooks})
 
 	rpcTracer.OnBlockStart(block)
 
 	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
 		core.ProcessBeaconBlockRoot(*beaconRoot, evm)
 	}
-	if api.eth.APIBackend.ChainConfig().IsPrague(block.Number(), block.Time()) || api.eth.APIBackend.ChainConfig().IsVerkle(block.Number(), block.Time()) {
+	if config.IsPrague(block.Number(), block.Time()) || config.IsVerkle(block.Number(), block.Time()) {
 		core.ProcessParentBlockHash(block.ParentHash(), evm)
 	}
 	var (
-		txs     = block.Transactions()
-		signer  = types.MakeSigner(api.eth.APIBackend.ChainConfig(), block.Number(), block.Time())
-		gp      = new(core.GasPool).AddGas(block.GasLimit())
-		usedGas = new(uint64)
+		txs       = block.Transactions()
+		signer    = types.MakeSigner(config, block.Number(), block.Time())
+		gp        = new(core.GasPool).AddGas(block.GasLimit())
+		usedGas   = new(uint64)
+		allLogs   []*types.Log
+		blockHash = block.Hash()
 	)
 
 	for i, tx := range txs {
@@ -125,15 +292,33 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 		}
 		statedb.SetTxContext(tx.Hash(), i)
 
-		receipt, err := core.ApplyTransactionWithEVM(msg, gp, statedb, block.Number(), block.Hash(), block.Time(), tx, usedGas, evm)
+		receipt, err := core.ApplyTransactionWithEVM(msg, gp, statedb, block.Number(), blockHash, blockCtx.Time, tx, usedGas, evm)
 		if err != nil {
 			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 		}
-
-		receipt.SetEffectiveGasPrice(tx, blockCtx.BaseFee)
+		allLogs = append(allLogs, receipt.Logs...)
 	}
 
-	root, destructs, accounts, storages, codes, err := statedb.StateDiff(api.eth.APIBackend.ChainConfig().IsEIP158(block.Number()))
+	isIsthmus := config.IsIsthmus(block.Time())
+
+	// Read requests if Prague is enabled.
+	if config.IsPrague(block.Number(), block.Time()) && !isIsthmus {
+		// EIP-6110
+		var requests [][]byte
+		if err := core.ParseDepositLogs(&requests, allLogs, config); err != nil {
+			return nil, fmt.Errorf("failed to parse deposit logs: %w", err)
+		}
+		// EIP-7002
+		if err := core.ProcessWithdrawalQueue(&requests, evm); err != nil {
+			return nil, fmt.Errorf("failed to process withdrawal queue: %w", err)
+		}
+		// EIP-7251
+		if err := core.ProcessConsolidationQueue(&requests, evm); err != nil {
+			return nil, fmt.Errorf("failed to process consolidation queue: %w", err)
+		}
+	}
+
+	root, destructs, accounts, storages, codes, err := statedb.StateDiff(config.IsEIP158(block.Number()))
 	if err != nil {
 		return nil, fmt.Errorf("could not get state diff: %w", err)
 	}
