@@ -12,6 +12,11 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
+const (
+	// writeLockTTL is the TTL for the write lock lease in seconds
+	writeLockTTL = 15
+)
+
 type LeaderFailover struct {
 	client        *clientv3.Client
 	key           string
@@ -320,7 +325,6 @@ func (lf *LeaderFailover) Close() error {
 func (lf *LeaderFailover) acquireWriteLockKey() error {
 	const (
 		retryInterval = 1 * time.Second
-		writeLockTTL  = 15 // seconds
 	)
 
 	log.Printf("[Leader Failover] Node %s attempting to acquire write lock key %s", lf.nodeID, lf.writeLockKey)
@@ -448,35 +452,34 @@ func (lf *LeaderFailover) releaseWriteLockKey() {
 	}
 }
 
-// startKeepAliveWriteLockKey starts a goroutine to keep the write lock lease alive
+// startKeepAliveWriteLockKey starts a goroutine to keep the write lock lease alive using KeepAliveOnce
 func (lf *LeaderFailover) startKeepAliveWriteLockKey() {
 	lf.keepAliveCtx, lf.keepAliveCancel = context.WithCancel(lf.ctx)
 
-	// Start keepalive
-	keepAliveChan, err := lf.client.KeepAlive(lf.keepAliveCtx, lf.writeLockLeaseID)
-	if err != nil {
-		log.Printf("[Leader Failover] Failed to start keepalive for write lock: %v", err)
-		return
-	}
-
-	log.Printf("[Leader Failover] Started keepalive for write lock key")
-
-	// Monitor keepalive responses
 	go func() {
+		keepAliveInterval := time.Duration(writeLockTTL/4) * time.Second // TTL/4 for safety
+
+		ticker := time.NewTicker(keepAliveInterval)
+		defer ticker.Stop()
+
+		log.Printf("[Leader Failover] Started keepalive for write lock key (interval: %v)", keepAliveInterval)
+
 		for {
 			select {
 			case <-lf.keepAliveCtx.Done():
 				log.Printf("[Leader Failover] Keepalive for write lock key stopped")
 				return
-			case resp, ok := <-keepAliveChan:
-				if !ok {
-					log.Printf("[Leader Failover] WARNING: Keepalive channel closed, write lock lease may have expired")
-					return
+
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(lf.keepAliveCtx, 3*time.Second)
+				resp, err := lf.client.KeepAliveOnce(ctx, lf.writeLockLeaseID)
+				cancel()
+
+				if err != nil {
+					log.Printf("[Leader Failover] Failed to renew lease: %v", err)
+				} else if resp.TTL <= 0 {
+					log.Printf("[Leader Failover] WARNING: Lease expired (TTL=%d)", resp.TTL)
 				}
-				if resp == nil {
-					log.Printf("[Leader Failover] WARNING: Keepalive response is nil, write lock lease may have expired")
-				}
-				// Keepalive successful, continue
 			}
 		}
 	}()

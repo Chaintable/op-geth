@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
@@ -133,14 +134,8 @@ func (wr *WriterRegistry) RegisterNode() error {
 			wr.nodeID, wr.chainID, existingNode))
 	}
 
-	// Keep lease alive
-	keepAliveCh, err := wr.lease.KeepAlive(wr.ctx, wr.leaseID)
-	if err != nil {
-		return fmt.Errorf("failed to keep lease alive: %w", err)
-	}
-
-	// Start keep-alive processor
-	go wr.processKeepAlive(keepAliveCh)
+	// Keep lease alive using KeepAliveOnce with retry
+	go wr.startKeepAlive()
 
 	log.Printf("[Writer Registry] Node %s registered successfully for chain %s with lease %d",
 		wr.nodeID, wr.chainID, wr.leaseID)
@@ -149,32 +144,49 @@ func (wr *WriterRegistry) RegisterNode() error {
 
 // UnregisterNode removes the writer node from etcd
 func (wr *WriterRegistry) UnregisterNode() error {
+	// Cancel context to stop keep-alive goroutine
+	wr.cancel()
+
 	// Revoke lease, which will automatically delete the key
 	_, err := wr.lease.Revoke(context.Background(), wr.leaseID)
 	if err != nil {
 		log.Printf("[Writer Registry] Failed to revoke lease: %v", err)
 	}
 
-	wr.cancel()
-
 	log.Printf("[Writer Registry] Node %s unregistered from chain %s", wr.nodeID, wr.chainID)
 	wr.lease.Close()
 	return err
 }
 
-// processKeepAlive processes lease keep-alive responses
-func (wr *WriterRegistry) processKeepAlive(keepAliveCh <-chan *clientv3.LeaseKeepAliveResponse) {
+// startKeepAlive starts a goroutine to keep the lease alive using KeepAliveOnce
+func (wr *WriterRegistry) startKeepAlive() {
+	// Calculate keep-alive interval as TTL/4 for safety margin
+	keepAliveInterval := time.Duration(wr.ttl/4) * time.Second
+	if keepAliveInterval < 1*time.Second {
+		keepAliveInterval = 1 * time.Second
+	}
+
+	ticker := time.NewTicker(keepAliveInterval)
+	defer ticker.Stop()
+
+	log.Printf("[Writer Registry] Started keep-alive for node %s (interval: %v)", wr.nodeID, keepAliveInterval)
+
 	for {
 		select {
 		case <-wr.ctx.Done():
-			log.Printf("[Writer Registry] Keep-alive processor stopped for node %s", wr.nodeID)
+			log.Printf("[Writer Registry] Keep-alive stopped for node %s", wr.nodeID)
 			return
-		case ka := <-keepAliveCh:
-			if ka == nil {
-				log.Printf("[Writer Registry] Lease keep-alive channel closed for node %s, stopping registration", wr.nodeID)
-				return
+
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(wr.ctx, 3*time.Second)
+			resp, err := wr.lease.KeepAliveOnce(ctx, wr.leaseID)
+			cancel()
+
+			if err != nil {
+				log.Printf("[Writer Registry] Failed to renew lease for node %s: %v", wr.nodeID, err)
+			} else if resp.TTL <= 0 {
+				log.Printf("[Writer Registry] WARNING: Lease expired for node %s (TTL=%d)", wr.nodeID, resp.TTL)
 			}
-			// Keep-alive successful, continue
 		}
 	}
 }
