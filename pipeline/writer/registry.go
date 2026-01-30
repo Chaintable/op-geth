@@ -22,6 +22,7 @@ type WriterNodeInfo struct {
 type WriterRegistry struct {
 	client   *clientv3.Client
 	chainID  string
+	version  string
 	nodeID   string
 	nodeInfo WriterNodeInfo
 	lease    clientv3.Lease
@@ -32,12 +33,13 @@ type WriterRegistry struct {
 }
 
 // NewWriterRegistry creates a new WriterRegistry instance
-func NewWriterRegistry(client *clientv3.Client, chainID, nodeID string, nodeInfo WriterNodeInfo, ttl int64) *WriterRegistry {
+func NewWriterRegistry(client *clientv3.Client, chainID, version, nodeID string, nodeInfo WriterNodeInfo, ttl int64) *WriterRegistry {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &WriterRegistry{
 		client:   client,
 		chainID:  chainID,
+		version:  version,
 		nodeID:   nodeID,
 		nodeInfo: nodeInfo,
 		ttl:      ttl,
@@ -178,5 +180,9 @@ func (wr *WriterRegistry) processKeepAlive(keepAliveCh <-chan *clientv3.LeaseKee
 }
 
 func (wr *WriterRegistry) getNodeKey() string {
-	return fmt.Sprintf("%s/writers/%s", wr.chainID, wr.nodeID)
+	key := wr.chainID
+	if wr.version != "" {
+		key += "/" + wr.version
+	}
+	return fmt.Sprintf("%s/writers/%s", key, wr.nodeID)
 }

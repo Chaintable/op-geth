@@ -119,7 +119,7 @@ func SetupLeaderElection(etcdEndpoints []string, electionKey string, nodeID stri
 			Topic:            writerConfig.Topic,
 		}
 
-		WriterRegistry = writer.NewWriterRegistry(etcdClient, BizChainID, nodeID, nodeInfo, writerConfig.TTL)
+		WriterRegistry = writer.NewWriterRegistry(etcdClient, BizChainID, Version, nodeID, nodeInfo, writerConfig.TTL)
 
 		// Register node immediately when initialized (not waiting to become leader)
 		if err := WriterRegistry.RegisterNode(); err != nil {
