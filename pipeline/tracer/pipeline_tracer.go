@@ -53,7 +53,7 @@ type pipelineTracerConfig struct {
 	GracePeriod   int      `json:"grace_period"` // default to 3 seconds, unit is second
 
 	// Writer node registry configurations
-	WriterRegistryTTL int64 `json:"writer_registry_ttl"` // TTL for writer node registration in seconds, default 30
+	WriterRegistryTTL int64 `json:"writer_registry_ttl"` // TTL for writer node registration in seconds, default 20 
 }
 
 func (config *pipelineTracerConfig) fillDefaultValues() {
@@ -81,7 +81,7 @@ func (config *pipelineTracerConfig) fillDefaultValues() {
 	}
 	// Fill default values for writer registry
 	if config.WriterRegistryTTL == 0 {
-		config.WriterRegistryTTL = 10 // 10 seconds default TTL
+		config.WriterRegistryTTL = 20 // 20 seconds default TTL
 	}
 }
 
@@ -108,7 +108,11 @@ func (t *PipelineTracer) OnBlockchainInit(chainConfig *params.ChainConfig) {
 
 	// set default election key
 	if t.config.ElectionKey == "" {
-		t.config.ElectionKey = chainConfig.ChainID.String() + "/writers/leader"
+		electionKey := chainConfig.ChainID.String()
+		if t.config.Version != "" {
+			electionKey += "/" + t.config.Version
+		}
+		t.config.ElectionKey = electionKey + "/writers/leader"
 	}
 
 	// Initialize pipeline
