@@ -82,6 +82,7 @@ Remove blockchain and state databases`,
 			dbExportCmd,
 			dbMetadataCmd,
 			dbCheckStateContentCmd,
+			dbSetFinalizedCmd,
 			dbInspectHistoryCmd,
 		},
 	}
@@ -185,6 +186,14 @@ WARNING: This is a low-level operation which may cause database corruption!`,
 		Usage:       "Shows metadata about the chain status.",
 		Flags:       slices.Concat(utils.NetworkFlags, utils.DatabaseFlags),
 		Description: "Shows metadata about the chain status.",
+	}
+	dbSetFinalizedCmd = &cli.Command{
+		Action:      dbSetFinalized,
+		Name:        "set-finalized",
+		Usage:       "Set finalized block to specified hash(or to latest hash if not specified)",
+		ArgsUsage:   "<hex-encoded block hash>",
+		Flags:       slices.Concat(utils.NetworkFlags, utils.DatabaseFlags),
+		Description: "Set finalized block to specified hash(or to latest hash if not specified)",
 	}
 	dbInspectHistoryCmd = &cli.Command{
 		Action:    inspectHistory,
@@ -764,6 +773,39 @@ func showMetaData(ctx *cli.Context) error {
 	table.SetHeader([]string{"Field", "Value"})
 	table.AppendBulk(data)
 	table.Render()
+	return nil
+}
+
+func dbSetFinalized(ctx *cli.Context) error {
+	stack, _ := makeConfigNode(ctx)
+	defer stack.Close()
+
+	chain, db := utils.MakeChain(ctx, stack, false)
+	defer db.Close()
+
+	var headHash common.Hash
+	if ctx.NArg() > 0 {
+		// set to specified block hash
+		key, err := common.ParseHexOrString(ctx.Args().Get(0))
+		if err != nil {
+			log.Info("Could not decode the block hash", "error", err)
+			return err
+		}
+		headHash = common.BytesToHash(key)
+	} else {
+		// set to latest block hash
+		headHash = rawdb.ReadHeadBlockHash(db)
+	}
+
+	headNumber, read := rawdb.ReadHeaderNumber(db, headHash)
+	if read == false {
+		err := fmt.Errorf("head block missing")
+		log.Info("db corrupt", "error", err)
+		return err
+	}
+	chain.SetHead(headNumber)
+	rawdb.WriteFinalizedBlockHash(db, headHash)
+
 	return nil
 }
 
