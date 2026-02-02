@@ -52,6 +52,16 @@ type Options struct {
 // run successfully with the provided context options. It returns an error if the
 // transaction would always revert, or if there are unexpected failures.
 func Estimate(ctx context.Context, call *core.Message, opts *Options, gasCap uint64) (uint64, []byte, error) {
+	log.Info("Gas estimation started",
+		"from", call.From,
+		"to", call.To,
+		"value", call.Value,
+		"dataLen", len(call.Data),
+		"callGasLimit", call.GasLimit,
+		"gasCap", gasCap,
+		"runMode", call.RunMode,
+	)
+
 	// Binary search the gas limit, as it may need to be higher than the amount used
 	var (
 		lo uint64 // lowest-known gas limit where tx execution fails
@@ -59,8 +69,11 @@ func Estimate(ctx context.Context, call *core.Message, opts *Options, gasCap uin
 	)
 	// Determine the highest gas limit can be used during the estimation.
 	hi = opts.Header.GasLimit
+	log.Info("Gas estimation: initial hi from header", "hi", hi, "headerGasLimit", opts.Header.GasLimit)
+
 	if call.GasLimit >= params.TxGas {
 		hi = call.GasLimit
+		log.Info("Gas estimation: hi updated from call.GasLimit", "hi", hi)
 	}
 
 	// Cap the maximum gas allowance according to EIP-7825 if the estimation targets Osaka
@@ -75,6 +88,7 @@ func Estimate(ctx context.Context, call *core.Message, opts *Options, gasCap uin
 			}
 		}
 		if opts.Config.IsOsaka(blockNumber, blockTime) {
+			log.Info("Gas estimation: EIP-7825 Osaka cap applied", "oldHi", hi, "newHi", params.MaxTxGas)
 			hi = params.MaxTxGas
 		}
 	}
@@ -88,6 +102,7 @@ func Estimate(ctx context.Context, call *core.Message, opts *Options, gasCap uin
 	} else {
 		feeCap = opts.DefaultGasPriceForEstimate
 	}
+	log.Info("Gas estimation: feeCap normalized", "feeCap", feeCap, "gasFeeCap", call.GasFeeCap, "gasPrice", call.GasPrice, "defaultGasPrice", opts.DefaultGasPriceForEstimate)
 	// Recap the highest gas limit with account's available balance.
 	if feeCap.BitLen() != 0 && call.RunMode != core.GasEstimationWithSkipCheckBalanceMode {
 		balance := opts.State.GetBalance(call.From).ToBig()
@@ -95,6 +110,7 @@ func Estimate(ctx context.Context, call *core.Message, opts *Options, gasCap uin
 		available := balance
 		if call.Value != nil {
 			if call.Value.Cmp(available) >= 0 {
+				log.Info("Gas estimation: insufficient funds for transfer", "balance", balance, "value", call.Value)
 				return 0, nil, core.ErrInsufficientFundsForTransfer
 			}
 			available.Sub(available, call.Value)
@@ -105,6 +121,7 @@ func Estimate(ctx context.Context, call *core.Message, opts *Options, gasCap uin
 			blobBalanceUsage.Mul(blobBalanceUsage, blobGasPerBlob)
 			blobBalanceUsage.Mul(blobBalanceUsage, call.BlobGasFeeCap)
 			if blobBalanceUsage.Cmp(available) >= 0 {
+				log.Info("Gas estimation: insufficient funds for blob gas", "available", available, "blobBalanceUsage", blobBalanceUsage)
 				return 0, nil, core.ErrInsufficientFunds
 			}
 			available.Sub(available, blobBalanceUsage)
@@ -117,52 +134,65 @@ func Estimate(ctx context.Context, call *core.Message, opts *Options, gasCap uin
 			if transfer == nil {
 				transfer = new(big.Int)
 			}
-			log.Debug("Gas estimation capped by limited funds", "original", hi, "balance", balance,
+			log.Info("Gas estimation: capped by limited funds", "original", hi, "balance", balance,
 				"sent", transfer, "maxFeePerGas", feeCap, "fundable", allowance)
 			hi = allowance.Uint64()
 		}
 	}
 	// Recap the highest gas allowance with specified gascap.
 	if gasCap != 0 && hi > gasCap {
-		log.Debug("Caller gas above allowance, capping", "requested", hi, "cap", gasCap)
+		log.Info("Gas estimation: caller gas above allowance, capping", "requested", hi, "cap", gasCap)
 		hi = gasCap
 	}
+	log.Info("Gas estimation: search range initialized", "lo", lo, "hi", hi)
 	// If the transaction is a plain value transfer, short circuit estimation and
 	// directly try 21000. Returning 21000 without any execution is dangerous as
 	// some tx field combos might bump the price up even for plain transfers (e.g.
 	// unused access list items). Ever so slightly wasteful, but safer overall.
 	if len(call.Data) == 0 {
 		if call.To != nil && opts.State.GetCodeSize(*call.To) == 0 {
+			log.Info("Gas estimation: trying simple transfer fast path", "targetGas", params.TxGas)
 			failed, _, err := execute(ctx, call, opts, params.TxGas)
 			if !failed && err == nil {
+				log.Info("Gas estimation: simple transfer fast path succeeded", "result", params.TxGas)
 				return params.TxGas, nil, nil
 			}
+			log.Info("Gas estimation: simple transfer fast path failed, continuing with binary search", "failed", failed, "err", err)
 		}
 	}
 	// We first execute the transaction at the highest allowable gas limit, since if this fails we
 	// can return error immediately.
+	log.Info("Gas estimation: executing with max gas limit", "hi", hi)
 	failed, result, err := execute(ctx, call, opts, hi)
 	if err != nil {
+		log.Info("Gas estimation: max gas execution error", "err", err)
 		return 0, nil, err
 	}
 	if failed {
 		if result != nil && !errors.Is(result.Err, vm.ErrOutOfGas) {
+			log.Info("Gas estimation: max gas execution failed with non-OOG error", "err", result.Err)
 			return 0, result.Revert(), result.Err
 		}
+		log.Info("Gas estimation: gas required exceeds allowance", "hi", hi)
 		return 0, nil, fmt.Errorf("gas required exceeds allowance (%d)", hi)
 	}
+	log.Info("Gas estimation: max gas execution succeeded", "usedGas", result.UsedGas, "maxUsedGas", result.MaxUsedGas)
 	// For almost any transaction, the gas consumed by the unconstrained execution
 	// above lower-bounds the gas limit required for it to succeed. One exception
 	// is those that explicitly check gas remaining in order to execute within a
 	// given limit, but we probably don't want to return the lowest possible gas
 	// limit for these cases anyway.
 	lo = result.UsedGas - 1
+	log.Info("Gas estimation: lo set from usedGas", "lo", lo, "usedGas", result.UsedGas)
 
 	// There's a fairly high chance for the transaction to execute successfully
 	// with gasLimit set to the first execution's usedGas + gasRefund. Explicitly
 	// check that gas amount and use as a limit for the binary search.
 	optimisticGasLimit := (result.MaxUsedGas + params.CallStipend) * 64 / 63
+	log.Info("Gas estimation: optimistic gas limit calculated", "optimisticGasLimit", optimisticGasLimit, "maxUsedGas", result.MaxUsedGas, "callStipend", params.CallStipend)
+
 	if optimisticGasLimit < hi {
+		log.Info("Gas estimation: trying optimistic gas limit", "optimisticGasLimit", optimisticGasLimit)
 		failed, _, err = execute(ctx, call, opts, optimisticGasLimit)
 		if err != nil {
 			// This should not happen under normal conditions since if we make it this far the
@@ -172,28 +202,38 @@ func Estimate(ctx context.Context, call *core.Message, opts *Options, gasCap uin
 		}
 		if failed {
 			lo = optimisticGasLimit
+			log.Info("Gas estimation: optimistic execution failed, updated lo", "lo", lo)
 		} else {
 			hi = optimisticGasLimit
+			log.Info("Gas estimation: optimistic execution succeeded, updated hi", "hi", hi)
 		}
 	}
 	// Binary search for the smallest gas limit that allows the tx to execute successfully.
+	log.Info("Gas estimation: starting binary search", "lo", lo, "hi", hi)
+	iteration := 0
 	for lo+1 < hi {
+		iteration++
 		if opts.ErrorRatio > 0 {
 			// It is a bit pointless to return a perfect estimation, as changing
 			// network conditions require the caller to bump it up anyway. Since
 			// wallets tend to use 20-25% bump, allowing a small approximation
 			// error is fine (as long as it's upwards).
-			if float64(hi-lo)/float64(hi) < opts.ErrorRatio {
+			errorRatio := float64(hi-lo) / float64(hi)
+			if errorRatio < opts.ErrorRatio {
+				log.Info("Gas estimation: early termination due to error ratio", "iteration", iteration, "lo", lo, "hi", hi, "errorRatio", errorRatio, "threshold", opts.ErrorRatio)
 				break
 			}
 		}
 		mid := lo + (hi-lo)/2
+		originalMid := mid
 		if mid > lo*2 {
 			// Most txs don't need much higher gas limit than their gas used, and most txs don't
 			// require near the full block limit of gas, so the selection of where to bisect the
 			// range here is skewed to favor the low side.
 			mid = lo * 2
 		}
+		log.Info("Gas estimation: binary search iteration", "iteration", iteration, "lo", lo, "hi", hi, "originalMid", originalMid, "adjustedMid", mid)
+
 		failed, _, err = execute(ctx, call, opts, mid)
 		if err != nil {
 			// This should not happen under normal conditions since if we make it this far the
@@ -203,10 +243,13 @@ func Estimate(ctx context.Context, call *core.Message, opts *Options, gasCap uin
 		}
 		if failed {
 			lo = mid
+			log.Info("Gas estimation: binary search iteration failed, updated lo", "iteration", iteration, "lo", lo)
 		} else {
 			hi = mid
+			log.Info("Gas estimation: binary search iteration succeeded, updated hi", "iteration", iteration, "hi", hi)
 		}
 	}
+	log.Info("Gas estimation: binary search completed", "iterations", iteration, "result", hi)
 	return hi, nil, nil
 }
 
