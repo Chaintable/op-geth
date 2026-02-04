@@ -18,10 +18,12 @@
 package core
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math/big"
+	"os"
 	"runtime"
 	"slices"
 	"sort"
@@ -190,9 +192,10 @@ type BlockChainConfig struct {
 	ChainHistoryMode history.HistoryMode
 
 	// Misc options
-	NoPrefetch bool            // Whether to disable heuristic state prefetching when processing blocks
-	Overrides  *ChainOverrides // Optional chain config overrides
-	VmConfig   vm.Config       // Config options for the EVM Interpreter
+	NoPrefetch     bool            // Whether to disable heuristic state prefetching when processing blocks
+	GenesisFilePath string          // Path to genesis.json file for fallback genesis alloc reading
+	Overrides      *ChainOverrides // Optional chain config overrides
+	VmConfig       vm.Config       // Config options for the EVM Interpreter
 
 	// TxLookupLimit specifies the maximum number of blocks from head for which
 	// transaction hashes will be indexed.
@@ -203,6 +206,25 @@ type BlockChainConfig struct {
 
 	// StateSizeTracking indicates whether the state size tracking is enabled.
 	StateSizeTracking bool
+}
+
+// readGenesisAllocFromFile reads genesis.json file and extracts the Alloc field
+func readGenesisAllocFromFile(filePath string) (types.GenesisAlloc, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read genesis file: %w", err)
+	}
+
+	var genesis Genesis
+	if err := json.Unmarshal(data, &genesis); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal genesis file: %w", err)
+	}
+
+	if genesis.Alloc == nil {
+		return nil, errors.New("genesis file does not contain alloc field")
+	}
+
+	return genesis.Alloc, nil
 }
 
 // DefaultConfig returns the default config.
@@ -511,9 +533,40 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 		// legacyXLayerBlock: 42810021
 		if block := bc.CurrentBlock(); block.Number.Uint64() == 0 || block.Number.Uint64() == 42810021 {
 			log.Info("Genesis block is set", "hash", block.Hash())
+
+			// Print bc.genesisBlock structure including private fields
+			if bc.genesisBlock != nil {
+				genesisData := map[string]interface{}{
+					"header":       bc.genesisBlock.Header(),
+					"uncles":       bc.genesisBlock.Uncles(),
+					"transactions": bc.genesisBlock.Transactions(),
+					"withdrawals":  bc.genesisBlock.Withdrawals(),
+					"hash":         bc.genesisBlock.Hash(),
+					"size":         bc.genesisBlock.Size(),
+					"receivedAt":   bc.genesisBlock.ReceivedAt,
+					"receivedFrom": bc.genesisBlock.ReceivedFrom,
+				}
+				if genesisJSON, err := json.MarshalIndent(genesisData, "", "  "); err != nil {
+					log.Error("Failed to marshal genesis block to JSON", "err", err)
+				} else {
+					log.Info("Genesis block structure", "json", string(genesisJSON))
+				}
+			}
+
 			alloc, err := getGenesisState(bc.db, block.Hash())
 			if err != nil {
-				return nil, fmt.Errorf("failed to get genesis state: %w", err)
+				log.Error("Failed to get genesis state", "err", err)
+
+				// Try to read from genesis file if path is configured
+				if bc.cfg.GenesisFilePath != "" {
+					log.Info("Attempting to read genesis alloc from file", "path", bc.cfg.GenesisFilePath)
+					if fileAlloc, fileErr := readGenesisAllocFromFile(bc.cfg.GenesisFilePath); fileErr == nil {
+						alloc = fileAlloc
+						log.Info("Successfully loaded genesis alloc from file", "accounts", len(alloc))
+					} else {
+						log.Error("Failed to read genesis alloc from file", "err", fileErr)
+					}
+				}
 			}
 			if alloc == nil {
 				return nil, errors.New("live blockchain tracer requires genesis alloc to be set")

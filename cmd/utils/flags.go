@@ -100,6 +100,11 @@ var (
 		Usage:    "URL for remote database",
 		Category: flags.LoggingCategory,
 	}
+	GenesisFileFlag = &cli.StringFlag{
+		Name:     "genesis-file",
+		Usage:    "Path to genesis.json file for fallback genesis alloc reading when database genesis state is missing",
+		Category: flags.EthCategory,
+	}
 	DBEngineFlag = &cli.StringFlag{
 		Name:     "db.engine",
 		Usage:    "Backing database implementation to use ('pebble' or 'leveldb')",
@@ -2487,15 +2492,16 @@ func MakeChain(ctx *cli.Context, stack *node.Node, readonly bool) (*core.BlockCh
 		Fatalf("%v", err)
 	}
 	options := &core.BlockChainConfig{
-		TrieCleanLimit: ethconfig.Defaults.TrieCleanCache,
-		NoPrefetch:     ctx.Bool(CacheNoPrefetchFlag.Name),
-		TrieDirtyLimit: ethconfig.Defaults.TrieDirtyCache,
-		ArchiveMode:    ctx.String(GCModeFlag.Name) == "archive",
-		TrieTimeLimit:  ethconfig.Defaults.TrieTimeout,
-		SnapshotLimit:  ethconfig.Defaults.SnapshotCache,
-		Preimages:      ctx.Bool(CachePreimagesFlag.Name),
-		StateScheme:    scheme,
-		StateHistory:   ctx.Uint64(StateHistoryFlag.Name),
+		TrieCleanLimit:       ethconfig.Defaults.TrieCleanCache,
+		NoPrefetch:           ctx.Bool(CacheNoPrefetchFlag.Name),
+		TrieDirtyLimit:       ethconfig.Defaults.TrieDirtyCache,
+		ArchiveMode:          ctx.String(GCModeFlag.Name) == "archive",
+		TrieTimeLimit:        ethconfig.Defaults.TrieTimeout,
+		SnapshotLimit:        ethconfig.Defaults.SnapshotCache,
+		Preimages:            ctx.Bool(CachePreimagesFlag.Name),
+		StateScheme:          scheme,
+		StateHistory:         ctx.Uint64(StateHistoryFlag.Name),
+		GenesisFilePath:      ctx.String(GenesisFileFlag.Name),
 		// Disable transaction indexing/unindexing.
 		TxLookupLimit: -1,
 
