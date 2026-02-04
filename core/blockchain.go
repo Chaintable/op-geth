@@ -192,10 +192,10 @@ type BlockChainConfig struct {
 	ChainHistoryMode history.HistoryMode
 
 	// Misc options
-	NoPrefetch     bool            // Whether to disable heuristic state prefetching when processing blocks
+	NoPrefetch      bool            // Whether to disable heuristic state prefetching when processing blocks
 	GenesisFilePath string          // Path to genesis.json file for fallback genesis alloc reading
-	Overrides      *ChainOverrides // Optional chain config overrides
-	VmConfig       vm.Config       // Config options for the EVM Interpreter
+	Overrides       *ChainOverrides // Optional chain config overrides
+	VmConfig        vm.Config       // Config options for the EVM Interpreter
 
 	// TxLookupLimit specifies the maximum number of blocks from head for which
 	// transaction hashes will be indexed.
@@ -555,8 +555,9 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 
 			alloc, err := getGenesisState(bc.db, block.Hash())
 			if err != nil {
-				log.Error("Failed to get genesis state", "err", err)
-
+				return nil, fmt.Errorf("failed to get genesis state: %w", err)
+			}
+			if alloc == nil {
 				// Try to read from genesis file if path is configured
 				if bc.cfg.GenesisFilePath != "" {
 					log.Info("Attempting to read genesis alloc from file", "path", bc.cfg.GenesisFilePath)
@@ -567,9 +568,9 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 						log.Error("Failed to read genesis alloc from file", "err", fileErr)
 					}
 				}
-			}
-			if alloc == nil {
-				return nil, errors.New("live blockchain tracer requires genesis alloc to be set")
+				if alloc == nil {
+					return nil, errors.New("live blockchain tracer requires genesis alloc to be set")
+				}
 			}
 			bc.logger.OnGenesisBlock(bc.genesisBlock, alloc)
 		}

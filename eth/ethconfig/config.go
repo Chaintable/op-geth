@@ -97,8 +97,9 @@ type Config struct {
 	SnapDiscoveryURLs []string
 
 	// State options.
-	NoPruning  bool // Whether to disable pruning and flush everything to disk
-	NoPrefetch bool // Whether to disable prefetching and only load state on demand
+	NoPruning       bool   // Whether to disable pruning and flush everything to disk
+	NoPrefetch      bool   // Whether to disable prefetching and only load state on demand
+	GenesisFilePath string // Path to genesis.json file for fallback genesis alloc reading
 
 	// Deprecated: use 'TransactionHistory' instead.
 	TxLookupLimit uint64 `toml:",omitempty"` // The maximum number of blocks from head whose tx indices are reserved.
