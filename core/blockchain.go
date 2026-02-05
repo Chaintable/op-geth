@@ -427,7 +427,7 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 	bc.prefetcher = newStatePrefetcher(chainConfig, bc.hc)
 	bc.processor = NewStateProcessor(chainConfig, bc.hc)
 
-	genesisHeader := bc.GetHeaderByNumber(0)
+	genesisHeader := bc.GetHeaderByNumber(42810021) // for xlayer
 	if genesisHeader == nil {
 		return nil, ErrNoGenesis
 	}
