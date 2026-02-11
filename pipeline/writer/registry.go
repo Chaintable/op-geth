@@ -51,26 +51,53 @@ func NewWriterRegistry(client *clientv3.Client, chainID, version, nodeID string,
 
 // RegisterNode registers the writer node in etcd with a lease
 func (wr *WriterRegistry) RegisterNode() error {
-	lease := clientv3.NewLease(wr.client)
-	leaseResp, err := lease.Grant(wr.ctx, wr.ttl)
+	// Grant lease and register key
+	if err := wr.grantLeaseAndRegisterKey(); err != nil {
+		// For initial registration, panic if node already exists
+		if err.Error() == "node already exists" {
+			panic(fmt.Sprintf("[Writer Registry] Node with ID %s already exists for chain %s", wr.nodeID, wr.chainID))
+		}
+		return err
+	}
+
+	// Keep lease alive using KeepAliveOnce with retry
+	go wr.startKeepAlive()
+
+	log.Printf("[Writer Registry] Node %s registered successfully for chain %s with lease %d",
+		wr.nodeID, wr.chainID, wr.leaseID)
+	return nil
+}
+
+// grantLeaseAndRegisterKey grants a new lease and registers the node key with transaction
+func (wr *WriterRegistry) grantLeaseAndRegisterKey() error {
+	if wr.leaseID != clientv3.NoLease {
+		wr.lease.Revoke(context.Background(), wr.leaseID)
+		wr.leaseID = clientv3.NoLease
+	}
+	if wr.lease != nil {
+		wr.lease.Close()
+	}
+	wr.lease = clientv3.NewLease(wr.client)
+
+	// 1. Grant new lease
+	leaseResp, err := wr.lease.Grant(wr.ctx, wr.ttl)
 	if err != nil {
 		return fmt.Errorf("failed to create lease: %w", err)
 	}
-	wr.leaseID = leaseResp.ID
-	wr.lease = lease
 
-	// Register node information
+	// 2. Prepare node information
 	nodeKey := wr.getNodeKey()
 	nodeInfoBytes, err := json.Marshal(wr.nodeInfo)
 	if err != nil {
+		wr.lease.Revoke(context.Background(), leaseResp.ID)
 		return fmt.Errorf("failed to marshal node info: %w", err)
 	}
 
-	// Use transaction to ensure node ID uniqueness
+	// 3. Use transaction to ensure node ID uniqueness
 	// Check if key exists and if it does, verify if it has the same lease
 	getResp, err := wr.client.Get(wr.ctx, nodeKey)
 	if err != nil {
-		wr.lease.Revoke(context.Background(), wr.leaseID)
+		wr.lease.Revoke(context.Background(), leaseResp.ID)
 		return fmt.Errorf("failed to check existing node: %w", err)
 	}
 
@@ -82,7 +109,7 @@ func (wr *WriterRegistry) RegisterNode() error {
 		txnResp, err = txn.If(
 			clientv3.Compare(clientv3.CreateRevision(nodeKey), "=", 0),
 		).Then(
-			clientv3.OpPut(nodeKey, string(nodeInfoBytes), clientv3.WithLease(wr.leaseID)),
+			clientv3.OpPut(nodeKey, string(nodeInfoBytes), clientv3.WithLease(leaseResp.ID)),
 		).Else(
 			clientv3.OpGet(nodeKey),
 		).Commit()
@@ -92,53 +119,29 @@ func (wr *WriterRegistry) RegisterNode() error {
 		if existingLease == 0 || existingLease == int64(wr.leaseID) {
 			// No lease or same lease (re-registration), we can take over
 			txnResp, err = txn.Then(
-				clientv3.OpPut(nodeKey, string(nodeInfoBytes), clientv3.WithLease(wr.leaseID)),
+				clientv3.OpPut(nodeKey, string(nodeInfoBytes), clientv3.WithLease(leaseResp.ID)),
 			).Commit()
 		} else {
 			// Different lease exists, another node is active
-			// Create a fake failed transaction response
-			txnResp = &clientv3.TxnResponse{
-				Succeeded: false,
-			}
-			// We'll handle the error message below using getResp.Kvs
-			err = nil // Clear error as we want to handle it as a failed transaction
+			wr.lease.Revoke(context.Background(), leaseResp.ID)
+			return fmt.Errorf("node already exists")
 		}
 	}
 
 	if err != nil {
 		// Revoke lease if transaction failed
-		wr.lease.Revoke(context.Background(), wr.leaseID)
+		wr.lease.Revoke(context.Background(), leaseResp.ID)
 		return fmt.Errorf("failed to register node in etcd: %w", err)
 	}
 
 	if !txnResp.Succeeded {
-		// Node with same ID already exists, revoke our lease and panic
-		wr.lease.Revoke(context.Background(), wr.leaseID)
-
-		// Get existing node info for error message
-		existingNode := ""
-		// Try to get from transaction response first
-		if len(txnResp.Responses) > 0 {
-			rangeResp := txnResp.Responses[0].GetResponseRange()
-			if rangeResp != nil && len(rangeResp.Kvs) > 0 {
-				existingNode = string(rangeResp.Kvs[0].Value)
-			}
-		}
-		// If not in transaction response, use the initial get response
-		if existingNode == "" && len(getResp.Kvs) > 0 {
-			existingNode = string(getResp.Kvs[0].Value)
-		}
-
-		// Panic to prevent duplicate nodes from running
-		panic(fmt.Sprintf("[Writer Registry] Node with ID %s already exists for chain %s. Existing node info: %s",
-			wr.nodeID, wr.chainID, existingNode))
+		// Transaction failed, another node holds the key
+		wr.lease.Revoke(context.Background(), leaseResp.ID)
+		return fmt.Errorf("node already exists")
 	}
 
-	// Keep lease alive using KeepAliveOnce with retry
-	go wr.startKeepAlive()
-
-	log.Printf("[Writer Registry] Node %s registered successfully for chain %s with lease %d",
-		wr.nodeID, wr.chainID, wr.leaseID)
+	// Success - update lease ID
+	wr.leaseID = leaseResp.ID
 	return nil
 }
 
@@ -166,6 +169,9 @@ func (wr *WriterRegistry) startKeepAlive() {
 		keepAliveInterval = 1 * time.Second
 	}
 
+	const maxFail = 3 // Allow 3 consecutive failures before rebuilding
+	failCount := 0
+
 	ticker := time.NewTicker(keepAliveInterval)
 	defer ticker.Stop()
 
@@ -182,13 +188,69 @@ func (wr *WriterRegistry) startKeepAlive() {
 			resp, err := wr.lease.KeepAliveOnce(ctx, wr.leaseID)
 			cancel()
 
-			if err != nil {
-				log.Printf("[Writer Registry] Failed to renew lease for node %s: %v", wr.nodeID, err)
-			} else if resp.TTL <= 0 {
-				log.Printf("[Writer Registry] WARNING: Lease expired for node %s (TTL=%d)", wr.nodeID, resp.TTL)
+			if err != nil || (resp != nil && resp.TTL <= 0) {
+				failCount++
+				if err != nil {
+					log.Printf("[Writer Registry] Failed to renew lease for node %s (%d/%d): %v", wr.nodeID, failCount, maxFail, err)
+				} else {
+					log.Printf("[Writer Registry] WARNING: Lease expired for node %s (%d/%d, TTL=%d)", wr.nodeID, failCount, maxFail, resp.TTL)
+				}
+
+				if failCount >= maxFail {
+					log.Printf("[Writer Registry] Max retries reached for node %s, attempting to rebuild lease", wr.nodeID)
+					if err := wr.rebuildLease(); err != nil {
+						log.Printf("[Writer Registry] Failed to rebuild lease for node %s: %v, stopping keep-alive", wr.nodeID, err)
+						return
+					}
+					failCount = 0 // Reset counter after successful rebuild
+					log.Printf("[Writer Registry] Lease rebuilt successfully for node %s, continuing keep-alive", wr.nodeID)
+				}
+			} else {
+				// Success
+				if failCount > 0 {
+					log.Printf("[Writer Registry] Lease renewal recovered for node %s after %d failures", wr.nodeID, failCount)
+				}
+				failCount = 0
 			}
 		}
 	}
+}
+
+// rebuildLease rebuilds the lease when keepalive fails repeatedly
+func (wr *WriterRegistry) rebuildLease() error {
+	const (
+		maxRetries    = 5
+		retryInterval = 5 * time.Second
+	)
+
+	log.Printf("[Writer Registry] Rebuilding lease for node %s", wr.nodeID)
+
+	// 2. Retry loop for granting lease and registering key
+	var lastErr error
+	for retry := 0; retry < maxRetries; retry++ {
+		// Check if context is cancelled
+		select {
+		case <-wr.ctx.Done():
+			return fmt.Errorf("context cancelled during lease rebuild: %w", wr.ctx.Err())
+		default:
+		}
+
+		// Use the same transaction-based registration logic
+		err := wr.grantLeaseAndRegisterKey()
+		if err != nil {
+			lastErr = err
+			log.Printf("[Writer Registry] Rebuild attempt %d/%d failed for node %s: %v", retry+1, maxRetries, wr.nodeID, err)
+			time.Sleep(retryInterval)
+			continue
+		}
+
+		// Success
+		log.Printf("[Writer Registry] Lease rebuilt successfully for node %s (new leaseID: %x, attempts: %d)", wr.nodeID, wr.leaseID, retry+1)
+		return nil
+	}
+
+	// All retries failed
+	return fmt.Errorf("failed to rebuild lease after %d attempts: %w", maxRetries, lastErr)
 }
 
 func (wr *WriterRegistry) getNodeKey() string {

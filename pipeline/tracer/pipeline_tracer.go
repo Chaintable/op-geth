@@ -50,10 +50,10 @@ type pipelineTracerConfig struct {
 	EtcdEndpoints []string `json:"etcd_endpoints"`
 	ElectionKey   string   `json:"election_key"`
 	NodeID        string   `json:"node_id"`      // default to hostname
-	GracePeriod   int      `json:"grace_period"` // default to 3 seconds, unit is second
+	GracePeriod   int      `json:"grace_period"` // default to 0 seconds, unit is second
 
 	// Writer node registry configurations
-	WriterRegistryTTL int64 `json:"writer_registry_ttl"` // TTL for writer node registration in seconds, default 20 
+	WriterRegistryTTL int64 `json:"writer_registry_ttl"` // TTL for writer node registration in seconds, default 20
 }
 
 func (config *pipelineTracerConfig) fillDefaultValues() {
@@ -75,9 +75,6 @@ func (config *pipelineTracerConfig) fillDefaultValues() {
 			}
 			config.NodeID = hostname
 		}
-	}
-	if config.GracePeriod == 0 {
-		config.GracePeriod = 3
 	}
 	// Fill default values for writer registry
 	if config.WriterRegistryTTL == 0 {

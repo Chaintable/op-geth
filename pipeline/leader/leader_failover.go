@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math/rand"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,12 +26,11 @@ type LeaderFailover struct {
 	LeaderMutex   sync.RWMutex
 	callbacks     LeaderCallbacks
 	gracePeriod   time.Duration
-	watcher       clientv3.Watcher
 	currentLeader atomic.Value // stores string
 
 	// Write lock key fields
 	writeLockKey     string
-	writeLockLeaseID clientv3.LeaseID
+	writeLockLeaseID atomic.Int64 // Stores clientv3.LeaseID (int64)
 	keepAliveCtx     context.Context
 	keepAliveCancel  context.CancelFunc
 }
@@ -55,7 +53,6 @@ func NewLeaderFailover(cfg Config) (*LeaderFailover, error) {
 		ctx:          ctx,
 		cancel:       cancel,
 		gracePeriod:  cfg.GracePeriod,
-		watcher:      clientv3.NewWatcher(client),
 		writeLockKey: cfg.Key + "/write-lock",
 	}
 	lf.currentLeader.Store("") // Initialize with empty string
@@ -77,36 +74,28 @@ func (lf *LeaderFailover) Start() error {
 		return fmt.Errorf("[Leader Failover] failed to get current leader: %w", err)
 	}
 
-	// Get the revision from the Get response
-	// This ensures we don't miss any changes between Get and Watch
-	watchRevision := resp.Header.Revision
-
 	if len(resp.Kvs) > 0 {
 		currentLeader := string(resp.Kvs[0].Value)
 		lf.currentLeader.Store(currentLeader)
-		log.Printf("[Leader Failover] Current leader is %s (revision: %d)", currentLeader, watchRevision)
+		log.Printf("[Leader Failover] Current leader is %s", currentLeader)
 
 		// Check if this node is the leader
 		if currentLeader == lf.nodeID {
-			// We are the designated leader in etcd
-			// Call becomeLeader immediately since there won't be a watch event for existing state
 			log.Printf("[Leader Failover] Node %s is the current leader in etcd, becoming leader", lf.nodeID)
 			lf.becomeLeader()
 		} else {
 			log.Printf("[Leader Failover] Node %s is in BACKUP mode, current leader is %s", lf.nodeID, currentLeader)
 		}
 	} else {
-		log.Printf("[Leader Failover] No leader set in etcd key %s (revision: %d)", lf.key, watchRevision)
+		log.Printf("[Leader Failover] No leader set in etcd key %s", lf.key)
 		// No leader exists, try to become leader
 		if err := lf.tryToBecomeLeader(); err != nil {
 			log.Printf("[Leader Failover] Failed to become leader: %v", err)
 		}
-		// Note: If tryToBecomeLeader succeeds, the watch will receive the Put event and call becomeLeader
 	}
 
-	// Start watching for changes from the revision we got from Get
-	// This ensures we don't miss any events that happened after our Get
-	go lf.watchLeaderChangesFromRevision(watchRevision + 1)
+	// Start periodic election check
+	go lf.startPeriodicElectionCheck()
 
 	return nil
 }
@@ -155,74 +144,67 @@ func (lf *LeaderFailover) tryToBecomeLeader() error {
 	return nil
 }
 
-func (lf *LeaderFailover) watchLeaderChangesFromRevision(revision int64) {
-	// Start watching from the specified revision to avoid missing events
-	log.Printf("[Leader Failover] Starting watch from revision %d", revision)
-	watchChan := lf.watcher.Watch(lf.ctx, lf.key, clientv3.WithRev(revision))
+func (lf *LeaderFailover) startPeriodicElectionCheck() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	log.Printf("[Leader Failover] Started periodic election check (interval: 5s)")
 
 	for {
-		// high priority
 		select {
 		case <-lf.ctx.Done():
+			log.Printf("[Leader Failover] Periodic election check stopped")
 			return
-		default:
-		}
 
-		select {
-		case <-lf.ctx.Done():
-			return
-		case watchResp := <-watchChan:
-			for _, event := range watchResp.Events {
-				lf.handleWatchEvent(event)
+		case <-ticker.C:
+			// Get current election key state
+			resp, err := lf.client.Get(lf.ctx, lf.key)
+			if err != nil {
+				log.Printf("[Leader Failover] Failed to check election key: %v", err)
+				continue
+			}
+
+			if len(resp.Kvs) == 0 {
+				// Election key does not exist, try to become leader
+				log.Printf("[Leader Failover] Election key not found, attempting to become leader")
+				if err := lf.tryToBecomeLeader(); err != nil {
+					log.Printf("[Leader Failover] Failed to become leader: %v", err)
+				}
+				continue
+			}
+
+			// Election key exists
+			currentLeader := string(resp.Kvs[0].Value)
+			lf.currentLeader.Store(currentLeader)
+
+			lf.LeaderMutex.RLock()
+			isLeader := lf.IsLeaderNode
+			lf.LeaderMutex.RUnlock()
+
+			if currentLeader == lf.nodeID {
+				// I should be the leader
+				if !isLeader {
+					// State desync: etcd says I'm leader, but local state says follower
+					log.Printf("[Leader Failover] State desync: etcd says leader, local says follower. Syncing...")
+					lf.becomeLeader()
+				} else {
+					// Already leader, check if KeepAlive goroutine is still running
+					if lf.writeLockLeaseID.Load() == int64(clientv3.NoLease) {
+						// KeepAlive goroutine has stopped, write lock likely lost
+						log.Printf("[Leader Failover] KeepAlive not running, stepping down")
+						lf.loseLeadership()
+					}
+				}
+			} else {
+				// Other node is the leader
+				if isLeader {
+					// State desync: etcd says other node is leader, but local state says I'm leader
+					log.Printf("[Leader Failover] State desync: etcd says follower (leader=%s), local says leader. Stepping down", currentLeader)
+					lf.loseLeadership()
+				}
+				// Already follower, no action needed
 			}
 		}
-	}
-}
-
-func (lf *LeaderFailover) handleWatchEvent(event *clientv3.Event) {
-	switch event.Type {
-	case clientv3.EventTypePut:
-		newLeader := string(event.Kv.Value)
-		oldLeader := lf.getCurrentLeader()
-		lf.currentLeader.Store(newLeader)
-
-		log.Printf("[Leader Failover] Leader changed from %s to %s, Current node %s", oldLeader, newLeader, lf.nodeID)
-
-		lf.LeaderMutex.RLock()
-		wasLeader := lf.IsLeaderNode
-		lf.LeaderMutex.RUnlock()
-
-		if newLeader == lf.nodeID && !wasLeader {
-			// This node becomes the leader
-			lf.becomeLeader()
-		} else if newLeader != lf.nodeID && wasLeader {
-			// This node loses leadership
-			lf.loseLeadership()
-		} else if newLeader != lf.nodeID && !wasLeader {
-			// Still backup, just different leader
-			log.Printf("[Leader Failover] Current Node %s remains in BACKUP mode, new leader is %s", lf.nodeID, newLeader)
-		}
-
-	case clientv3.EventTypeDelete:
-		log.Printf("[Leader Failover] Leader key %s was deleted", lf.key)
-		oldLeader := lf.getCurrentLeader()
-		lf.currentLeader.Store("")
-
-		if lf.IsLeader() {
-			// If we were the leader, lose leadership
-			lf.loseLeadership()
-		}
-
-		// Try to become the new leader after a short delay
-		go func() {
-			// Wait a random time between 0 and 1s to avoid race conditions with other nodes
-			time.Sleep(time.Duration(rand.Intn(1000)) * time.Millisecond)
-
-			log.Printf("[Leader Failover] Key deleted (old leader was %s), attempting to become leader", oldLeader)
-			if err := lf.tryToBecomeLeader(); err != nil {
-				log.Printf("[Leader Failover] Failed to become leader after key deletion: %v", err)
-			}
-		}()
 	}
 }
 
@@ -231,11 +213,10 @@ func (lf *LeaderFailover) becomeLeader() {
 	log.Printf("[Leader Failover] Current node %s waiting grace period (%v) before becoming leader", lf.nodeID, lf.gracePeriod)
 	time.Sleep(lf.gracePeriod)
 	// Quick check: if already leader, skip (without holding the lock)
-	lf.LeaderMutex.RLock()
-	alreadyLeader := lf.IsLeaderNode
-	lf.LeaderMutex.RUnlock()
+	lf.LeaderMutex.Lock()
+	defer lf.LeaderMutex.Unlock()
 
-	if alreadyLeader {
+	if lf.IsLeaderNode && lf.writeLockLeaseID.Load() != int64(clientv3.NoLease) {
 		log.Printf("[Leader Failover] Current node %s is already LEADER, skipping", lf.nodeID)
 		return
 	}
@@ -247,10 +228,6 @@ func (lf *LeaderFailover) becomeLeader() {
 		// Failed to acquire write lock, do not become leader
 		return
 	}
-
-	// Double-check: acquire the lock and check again
-	lf.LeaderMutex.Lock()
-	defer lf.LeaderMutex.Unlock()
 
 	if lf.IsLeaderNode {
 		log.Printf("[Leader Failover] Current node %s is already LEADER (double-check), skipping", lf.nodeID)
@@ -269,12 +246,12 @@ func (lf *LeaderFailover) loseLeadership() {
 	lf.LeaderMutex.Lock()
 	defer lf.LeaderMutex.Unlock()
 
+	// Release write lock key first (before executing callback)
+	lf.releaseWriteLockKey()
+
 	if !lf.IsLeaderNode {
 		return
 	}
-
-	// Release write lock key first (before executing callback)
-	lf.releaseWriteLockKey()
 
 	// Execute callback for losing leadership
 	ctx, cancel := context.WithTimeout(context.Background(), lf.gracePeriod)
@@ -314,9 +291,6 @@ func (lf *LeaderFailover) Stop() error {
 
 func (lf *LeaderFailover) Close() error {
 	lf.cancel()
-	if err := lf.watcher.Close(); err != nil {
-		return err
-	}
 	return lf.client.Close()
 }
 
@@ -324,7 +298,7 @@ func (lf *LeaderFailover) Close() error {
 // This method is idempotent: if the key is already held by this node, it returns immediately
 func (lf *LeaderFailover) acquireWriteLockKey() error {
 	const (
-		retryInterval = 1 * time.Second
+		retryInterval = 50 * time.Millisecond
 	)
 
 	log.Printf("[Leader Failover] Node %s attempting to acquire write lock key %s", lf.nodeID, lf.writeLockKey)
@@ -338,15 +312,16 @@ func (lf *LeaderFailover) acquireWriteLockKey() error {
 		currentHolder := string(resp.Kvs[0].Value)
 		if currentHolder == lf.nodeID {
 			// This node already holds the write lock
-			if lf.writeLockLeaseID != 0 {
+			if lf.writeLockLeaseID.Load() != int64(clientv3.NoLease) {
 				// We have the lease ID in memory, just return (idempotent)
 				log.Printf("[Leader Failover] Write lock already held by this node, skipping")
 				return nil
 			} else {
 				// Reattach to the existing lease (e.g., after restart)
-				lf.writeLockLeaseID = clientv3.LeaseID(resp.Kvs[0].Lease)
-				log.Printf("[Leader Failover] Reattaching to existing write lock (lease: %d)", lf.writeLockLeaseID)
-				if lf.writeLockLeaseID != 0 {
+				leaseID := clientv3.LeaseID(resp.Kvs[0].Lease)
+				lf.writeLockLeaseID.Store(int64(leaseID))
+				log.Printf("[Leader Failover] Reattaching to existing write lock (lease: %d)", leaseID)
+				if leaseID != clientv3.NoLease {
 					lf.startKeepAliveWriteLockKey()
 				}
 				return nil
@@ -397,7 +372,7 @@ func (lf *LeaderFailover) acquireWriteLockKey() error {
 
 		if txnResp.Succeeded {
 			// Successfully acquired the write lock
-			lf.writeLockLeaseID = leaseResp.ID
+			lf.writeLockLeaseID.Store(int64(leaseResp.ID))
 			log.Printf("[Leader Failover] Node %s successfully acquired write lock key after %d retries", lf.nodeID, retry+1)
 
 			// Start keepalive for the lease
@@ -431,7 +406,8 @@ func (lf *LeaderFailover) releaseWriteLockKey() {
 	}
 
 	// Delete the write lock key
-	if lf.writeLockLeaseID != 0 {
+	leaseID := clientv3.LeaseID(lf.writeLockLeaseID.Load())
+	if leaseID != clientv3.NoLease {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 
@@ -442,12 +418,12 @@ func (lf *LeaderFailover) releaseWriteLockKey() {
 		}
 
 		// Revoke the lease
-		_, err = lf.client.Revoke(ctx, lf.writeLockLeaseID)
+		_, err = lf.client.Revoke(ctx, leaseID)
 		if err != nil {
 			log.Printf("[Leader Failover] Failed to revoke write lock lease: %v", err)
 		}
 
-		lf.writeLockLeaseID = 0
+		lf.writeLockLeaseID.Store(0)
 		log.Printf("[Leader Failover] Node %s released write lock key", lf.nodeID)
 	}
 }
@@ -457,8 +433,12 @@ func (lf *LeaderFailover) startKeepAliveWriteLockKey() {
 	lf.keepAliveCtx, lf.keepAliveCancel = context.WithCancel(lf.ctx)
 
 	go func() {
-		keepAliveInterval := time.Duration(writeLockTTL/4) * time.Second // TTL/4 for safety
+		const (
+			keepAliveInterval = time.Duration(writeLockTTL/4) * time.Second // TTL/4 for safety
+			maxFail           = 3                                           // Allow 3 consecutive failures
+		)
 
+		failCount := 0
 		ticker := time.NewTicker(keepAliveInterval)
 		defer ticker.Stop()
 
@@ -471,14 +451,30 @@ func (lf *LeaderFailover) startKeepAliveWriteLockKey() {
 				return
 
 			case <-ticker.C:
+				leaseID := clientv3.LeaseID(lf.writeLockLeaseID.Load())
 				ctx, cancel := context.WithTimeout(lf.keepAliveCtx, 3*time.Second)
-				resp, err := lf.client.KeepAliveOnce(ctx, lf.writeLockLeaseID)
+				resp, err := lf.client.KeepAliveOnce(ctx, leaseID)
 				cancel()
 
-				if err != nil {
-					log.Printf("[Leader Failover] Failed to renew lease: %v", err)
-				} else if resp.TTL <= 0 {
-					log.Printf("[Leader Failover] WARNING: Lease expired (TTL=%d)", resp.TTL)
+				if err != nil || (resp != nil && resp.TTL <= 0) {
+					failCount++
+					if err != nil {
+						log.Printf("[Leader Failover] Failed to renew lease (%d/%d): %v", failCount, maxFail, err)
+					} else {
+						log.Printf("[Leader Failover] WARNING: Lease expired (%d/%d, TTL=%d)", failCount, maxFail, resp.TTL)
+					}
+
+					if failCount >= maxFail {
+						log.Printf("[Leader Failover] Max retries reached, lease likely expired, stepping down")
+						lf.loseLeadership() // Synchronous call to ensure state is cleaned up
+						return
+					}
+				} else {
+					// Success
+					if failCount > 0 {
+						log.Printf("[Leader Failover] Lease renewal recovered after %d failures", failCount)
+					}
+					failCount = 0
 				}
 			}
 		}
