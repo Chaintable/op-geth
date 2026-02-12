@@ -936,7 +936,6 @@ func (g *Genesis) Commit(db ethdb.Database, triedb *triedb.Database) (*types.Blo
 	} else {
 		log.Warn("Alloc was not saved to the database because the genesis is too large", "total accounts", len(g.Alloc))
 	}
-
 	rawdb.WriteBlock(batch, block)
 	rawdb.WriteReceipts(batch, block.Hash(), block.NumberU64(), nil)
 	rawdb.WriteCanonicalHash(batch, block.Hash(), block.NumberU64())

@@ -18,10 +18,12 @@
 package core
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math/big"
+	"os"
 	"runtime"
 	"slices"
 	"sort"
@@ -30,6 +32,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Chaintable/pipeline/leader"
+	"github.com/Chaintable/pipeline/tracer"
+	ptypes "github.com/Chaintable/pipeline/types"
+	"github.com/Chaintable/pipeline/util"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/lru"
 	"github.com/ethereum/go-ethereum/common/mclock"
@@ -186,9 +192,10 @@ type BlockChainConfig struct {
 	ChainHistoryMode history.HistoryMode
 
 	// Misc options
-	NoPrefetch bool            // Whether to disable heuristic state prefetching when processing blocks
-	Overrides  *ChainOverrides // Optional chain config overrides
-	VmConfig   vm.Config       // Config options for the EVM Interpreter
+	NoPrefetch      bool            // Whether to disable heuristic state prefetching when processing blocks
+	GenesisFilePath string          // Path to genesis.json file for fallback genesis alloc reading
+	Overrides       *ChainOverrides // Optional chain config overrides
+	VmConfig        vm.Config       // Config options for the EVM Interpreter
 
 	// TxLookupLimit specifies the maximum number of blocks from head for which
 	// transaction hashes will be indexed.
@@ -199,6 +206,25 @@ type BlockChainConfig struct {
 
 	// StateSizeTracking indicates whether the state size tracking is enabled.
 	StateSizeTracking bool
+}
+
+// readGenesisAllocFromFile reads genesis.json file and extracts the Alloc field
+func readGenesisAllocFromFile(filePath string) (types.GenesisAlloc, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read genesis file: %w", err)
+	}
+
+	var genesis Genesis
+	if err := json.Unmarshal(data, &genesis); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal genesis file: %w", err)
+	}
+
+	if genesis.Alloc == nil {
+		return nil, errors.New("genesis file does not contain alloc field")
+	}
+
+	return genesis.Alloc, nil
 }
 
 // DefaultConfig returns the default config.
@@ -401,7 +427,7 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 	bc.prefetcher = newStatePrefetcher(chainConfig, bc.hc)
 	bc.processor = NewStateProcessor(chainConfig, bc.hc)
 
-	genesisHeader := bc.GetHeaderByNumber(0)
+	genesisHeader := bc.GetHeaderByNumber(42810021) // for xlayer
 	if genesisHeader == nil {
 		return nil, ErrNoGenesis
 	}
@@ -501,14 +527,50 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 	if bc.logger != nil && bc.logger.OnBlockchainInit != nil {
 		bc.logger.OnBlockchainInit(chainConfig)
 	}
+
+	log.Info("Initialised blockchain", "head", bc.CurrentHeader().Number, "hash", bc.CurrentHeader().Hash())
 	if bc.logger != nil && bc.logger.OnGenesisBlock != nil {
-		if block := bc.CurrentBlock(); block.Number.Uint64() == 0 {
+		// legacyXLayerBlock: 42810021
+		if block := bc.CurrentBlock(); block.Number.Uint64() == 0 || block.Number.Uint64() == 42810021 {
+			log.Info("Genesis block is set", "hash", block.Hash())
+
+			// Print bc.genesisBlock structure including private fields
+			if bc.genesisBlock != nil {
+				genesisData := map[string]interface{}{
+					"header":       bc.genesisBlock.Header(),
+					"uncles":       bc.genesisBlock.Uncles(),
+					"transactions": bc.genesisBlock.Transactions(),
+					"withdrawals":  bc.genesisBlock.Withdrawals(),
+					"hash":         bc.genesisBlock.Hash(),
+					"size":         bc.genesisBlock.Size(),
+					"receivedAt":   bc.genesisBlock.ReceivedAt,
+					"receivedFrom": bc.genesisBlock.ReceivedFrom,
+				}
+				if genesisJSON, err := json.MarshalIndent(genesisData, "", "  "); err != nil {
+					log.Error("Failed to marshal genesis block to JSON", "err", err)
+				} else {
+					log.Info("Genesis block structure", "json", string(genesisJSON))
+				}
+			}
+
 			alloc, err := getGenesisState(bc.db, block.Hash())
 			if err != nil {
 				return nil, fmt.Errorf("failed to get genesis state: %w", err)
 			}
 			if alloc == nil {
-				return nil, errors.New("live blockchain tracer requires genesis alloc to be set")
+				// Try to read from genesis file if path is configured
+				if bc.cfg.GenesisFilePath != "" {
+					log.Info("Attempting to read genesis alloc from file", "path", bc.cfg.GenesisFilePath)
+					if fileAlloc, fileErr := readGenesisAllocFromFile(bc.cfg.GenesisFilePath); fileErr == nil {
+						alloc = fileAlloc
+						log.Info("Successfully loaded genesis alloc from file", "accounts", len(alloc))
+					} else {
+						log.Error("Failed to read genesis alloc from file", "err", fileErr)
+					}
+				}
+				if alloc == nil {
+					return nil, errors.New("live blockchain tracer requires genesis alloc to be set")
+				}
 			}
 			bc.logger.OnGenesisBlock(bc.genesisBlock, alloc)
 		}
@@ -1726,6 +1788,64 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	return nil
 }
 
+// 返回两个块的共同祖先，以及两个块的从共同祖先到两个块的路径,即drop和new
+func (bc *BlockChain) getCommonAncestor(blocka ptypes.BlockContext, blockb ptypes.BlockContext) (ptypes.BlockContext, []ptypes.BlockContext, []ptypes.BlockContext) {
+	var (
+		chainA, chainB []ptypes.BlockContext
+	)
+	if blockb.ParentHash == blocka.Hash {
+		return blocka, chainA, []ptypes.BlockContext{blockb}
+	}
+	for blockb.BlockNumber > blocka.BlockNumber {
+		chainB = append(chainB, blockb)
+		headerb := bc.GetHeaderByHash2(blockb.ParentHash)
+		if headerb == nil {
+			log.Crit("Failed to get header by hash", "hash", blockb.ParentHash, "blocka", blocka.BlockNumber, "blockb", blockb.BlockNumber)
+		} else {
+			blockb = ptypes.BlockContext{
+				BlockNumber: headerb.Number.Uint64(),
+				Hash:        headerb.Hash(),
+				ParentHash:  headerb.ParentHash,
+				Timestamp:   headerb.Time,
+			}
+		}
+	}
+	for blocka.Hash != blockb.Hash {
+		chainA = append(chainA, blocka)
+		headera := bc.GetHeaderByHash2(blocka.ParentHash)
+		if headera == nil {
+			log.Crit("Failed to get header by hash", "hash", blocka.ParentHash, "blocka", blocka.BlockNumber, "blockb", blockb.BlockNumber)
+		} else {
+			blocka = ptypes.BlockContext{
+				BlockNumber: headera.Number.Uint64(),
+				Hash:        headera.Hash(),
+				ParentHash:  headera.ParentHash,
+				Timestamp:   headera.Time,
+			}
+		}
+
+		chainB = append(chainB, blockb)
+		headerb := bc.GetHeaderByHash2(blockb.ParentHash)
+		if headerb == nil {
+			log.Crit("Failed to get header by hash", "hash", blockb.ParentHash, "blocka", blocka.BlockNumber, "blockb", blockb.BlockNumber)
+		} else {
+			blockb = ptypes.BlockContext{
+				BlockNumber: headerb.Number.Uint64(),
+				Hash:        headerb.Hash(),
+				ParentHash:  headerb.ParentHash,
+				Timestamp:   headerb.Time,
+			}
+		}
+	}
+	// now blocka == blockb == ancestor
+
+	// reverse chainA
+	slices.Reverse(chainA)
+	// reverse chainB
+	slices.Reverse(chainB)
+	return blocka, chainA, chainB
+}
+
 // writeBlockAndSetHead is the internal implementation of WriteBlockAndSetHead.
 // This function expects the chain mutex to be held.
 func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types.Receipt, logs []*types.Log, state *state.StateDB, emitHeadEvent bool, innerTxs [][]*types.InnerTx) (status WriteStatus, err error) {
@@ -1743,6 +1863,50 @@ func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types
 
 	// Set new head.
 	bc.writeHeadBlock(block)
+
+	// 先确保 pipeline tracer 不为空，然后再判断是否需要push kafka
+	// 上一个push kafka的block, 必然存在(至少有genesis block)
+	// 上一个push kafka的block比当前的head block还要新，说明有unwind回退，不需要处理, 即使是fork，等有更新的block的时候再一起push
+	isLeader := leader.GlobalManager.IsLeader()
+	leader.GlobalManager.RLock()
+	lastPushedBlock := tracer.NodeXPusher.LastPushedBlock()
+	leader.GlobalManager.RUnlock()
+
+	if tracer.NodeXPusher != nil && isLeader && lastPushedBlock.BlockNumber <= block.NumberU64() {
+		_, dropBlocks, newBlocks := bc.getCommonAncestor(*lastPushedBlock, ptypes.BlockContext{
+			BlockNumber: block.NumberU64(),
+			Hash:        block.Hash(),
+			ParentHash:  block.ParentHash(),
+			Timestamp:   block.Time(),
+		})
+		var blockChange *ptypes.BlockChangeNotification
+		if len(dropBlocks) > 0 {
+			blockChange = &ptypes.BlockChangeNotification{
+				ChangeType: 2,
+				NewBlocks:  newBlocks,
+				DropBlocks: dropBlocks,
+			}
+		} else if len(newBlocks) > 0 {
+			blockChange = &ptypes.BlockChangeNotification{
+				ChangeType: 1,
+				NewBlocks:  newBlocks,
+			}
+		}
+
+		parent := bc.GetHeaderByHash(block.Header().ParentHash)
+
+		if parent.Root == block.Root() {
+			bc.logger.OnCommit(parent.Root, block.Root(), nil, nil, nil, nil, nil, nil)
+		}
+
+		if blockChange != nil {
+			err := tracer.NodeXPusher.PushBlockChangeNotification(blockChange)
+			if err != nil {
+				log.Error("SetCanonical PushBlockChangeNotification error", "err", err)
+			}
+			log.Info("NodeXPusher PushBlockChangeNotification", "blockChange", blockChange)
+		}
+	}
 
 	bc.chainFeed.Send(ChainEvent{Header: block.Header()})
 	if len(logs) > 0 {
@@ -2660,6 +2824,54 @@ func (bc *BlockChain) SetCanonical(head *types.Block) (common.Hash, error) {
 	}
 	bc.writeHeadBlock(head)
 
+	// 先确保 pipeline tracer 不为空，然后再判断是否需要push kafka
+	// 上一个push kafka的block, 必然存在(至少有genesis block)
+	// 上一个push kafka的block比当前的head block还要新，说明有unwind回退，不需要处理, 即使是fork，等有更新的block的时候再一起push
+	isLeader := leader.GlobalManager.IsLeader()
+	leader.GlobalManager.RLock()
+	lastPushedBlock := tracer.NodeXPusher.LastPushedBlock()
+	leader.GlobalManager.RUnlock()
+
+	if tracer.NodeXPusher != nil && isLeader && lastPushedBlock.BlockNumber <= head.NumberU64() {
+		_, dropBlocks, newBlocks := bc.getCommonAncestor(*lastPushedBlock, ptypes.BlockContext{
+			BlockNumber: head.NumberU64(),
+			Hash:        head.Hash(),
+			ParentHash:  head.ParentHash(),
+			Timestamp:   head.Time(),
+		})
+		var blockChange *ptypes.BlockChangeNotification
+		if len(dropBlocks) > 0 {
+			blockChange = &ptypes.BlockChangeNotification{
+				ChangeType: 2,
+				NewBlocks:  newBlocks,
+				DropBlocks: dropBlocks,
+			}
+		} else if len(newBlocks) > 0 {
+			blockChange = &ptypes.BlockChangeNotification{
+				ChangeType: 1,
+				NewBlocks:  newBlocks,
+			}
+		}
+
+		parent := bc.GetHeaderByHash(head.Header().ParentHash)
+
+		if parent.Root == head.Root() {
+			bc.logger.OnCommit(parent.Root, head.Root(), nil, nil, nil, nil, nil, nil)
+		}
+
+		if blockChange != nil {
+			err := tracer.NodeXPusher.PushBlockChangeNotification(blockChange)
+			if err != nil {
+				log.Error("SetCanonical PushBlockChangeNotification error", "err", err)
+			}
+			log.Info("NodeXPusher PushBlockChangeNotification", "blockChange", blockChange)
+		}
+
+		log.Debug("SetCanonical New BlockChangeNotification")
+	} else {
+		log.Debug("SetCanonical NodeXPusher is nil or LastBlockNotice.NewBlocks[0].BlockNumber <= block.NumberU64()")
+	}
+
 	// Emit events
 	logs := bc.collectLogs(head, false)
 	bc.chainFeed.Send(ChainEvent{Header: head.Header()})
@@ -2895,4 +3107,26 @@ func (bc *BlockChain) GetTrieFlushInterval() time.Duration {
 // StateSizer returns the state size tracker, or nil if it's not initialized
 func (bc *BlockChain) StateSizer() *state.SizeTracker {
 	return bc.stateSizer
+}
+
+func (bc *BlockChain) GetSnaps() *snapshot.Tree {
+	return bc.snaps
+}
+
+func (bc *BlockChain) GetHeaderByHash2(blockHash common.Hash) *types.Header {
+	header := bc.GetHeaderByHash(blockHash)
+	if header == nil {
+		if tracer.NodeXPusher != nil {
+			header := &types.Header{}
+			key := fmt.Sprintf("%s/%s/block", tracer.BizChainID, blockHash.String())
+			err := util.DownloadFileFromS3Json(tracer.NodeXPusher.Uploader, tracer.NodeXPusher.Bucket, key, header)
+			if err != nil {
+				log.Error("GetHeaderByHash2 DownloadFileFromS3Json error", "err", err, "key", key, "bucket", tracer.NodeXPusher.Bucket)
+				return nil
+			} else {
+				return header
+			}
+		}
+	}
+	return header
 }

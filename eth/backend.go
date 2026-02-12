@@ -255,22 +255,23 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	}
 	var (
 		options = &core.BlockChainConfig{
-			TrieCleanLimit:   config.TrieCleanCache,
-			NoPrefetch:       config.NoPrefetch,
-			TrieDirtyLimit:   config.TrieDirtyCache,
-			ArchiveMode:      config.NoPruning,
-			TrieTimeLimit:    config.TrieTimeout,
-			SnapshotLimit:    config.SnapshotCache,
-			Preimages:        config.Preimages,
-			StateHistory:     config.StateHistory,
-			StateScheme:      scheme,
-			ChainHistoryMode: config.HistoryMode,
-			TxLookupLimit:    int64(min(config.TransactionHistory, math.MaxInt64)),
+			TrieCleanLimit:       config.TrieCleanCache,
+			NoPrefetch:           config.NoPrefetch,
+			GenesisFilePath:      config.GenesisFilePath,
+			TrieDirtyLimit:       config.TrieDirtyCache,
+			ArchiveMode:          config.NoPruning,
+			TrieTimeLimit:        config.TrieTimeout,
+			SnapshotLimit:        config.SnapshotCache,
+			Preimages:            config.Preimages,
+			StateHistory:         config.StateHistory,
+			StateScheme:          scheme,
+			ChainHistoryMode:     config.HistoryMode,
+			TxLookupLimit:        int64(min(config.TransactionHistory, math.MaxInt64)),
 			VmConfig: vm.Config{
 				EnablePreimageRecording: config.EnablePreimageRecording,
 				EnableWitnessStats:      config.EnableWitnessStats,
 				StatelessSelfValidation: config.StatelessSelfValidation,
-				
+
 				// For X Layer
 				EnableInnerTxs: config.XLayer.EnableInnerTx,
 			},
@@ -595,6 +596,9 @@ func (s *Ethereum) APIs() []rpc.API {
 		}, {
 			Namespace: "net",
 			Service:   s.netRPCService,
+		}, {
+			Namespace: "trace",
+			Service:   NewDebankAPI(s),
 		},
 	}...)
 }

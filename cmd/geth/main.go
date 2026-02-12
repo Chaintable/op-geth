@@ -63,6 +63,7 @@ var (
 		utils.NoUSBFlag, // deprecated
 		utils.USBFlag,
 		utils.SmartCardDaemonPathFlag,
+		utils.GenesisFileFlag,
 		utils.OverrideOsaka,
 		utils.OverrideBPO1,
 		utils.OverrideBPO2,
