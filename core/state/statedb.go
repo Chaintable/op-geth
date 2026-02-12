@@ -1841,7 +1841,7 @@ func (s *StateDB) StateDiff(deleteEmptyObjects bool) (common.Hash, map[common.Ha
 			if obj.code != nil && obj.dirtyCode {
 				codes[common.BytesToHash(obj.CodeHash())] = obj.code
 			}
-			abuf, err := rlp.EncodeToBytes(obj.data)
+			abuf, err := rlp.EncodeToBytes(&obj.data)
 			if err != nil {
 				return common.Hash{}, nil, nil, nil, nil, fmt.Errorf("can't encode object at %s: %v", addr.Hex(), err)
 			}
