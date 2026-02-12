@@ -28,6 +28,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	pmetrics "github.com/ethereum/go-ethereum/pipeline/metrics"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/lru"
 	"github.com/ethereum/go-ethereum/common/mclock"
@@ -978,6 +980,7 @@ func (bc *BlockChain) writeHeadBlock(block *types.Block) {
 
 	bc.currentBlock.Store(block.Header())
 	headBlockGauge.Update(int64(block.NumberU64()))
+	pmetrics.LatestBlockTime.Update(int64(block.Time()))
 }
 
 // stopWithoutSaving stops the blockchain service. If any imports are currently in progress
