@@ -23,6 +23,7 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params/forks"
 )
@@ -517,6 +518,17 @@ type ChainConfig struct {
 
 	InteropTime *uint64 `json:"interopTime,omitempty"` // Interop switch time (nil = no fork, 0 = already on optimism interop)
 
+	// StateOverrideForks allow setting state-modifying-only forks
+	StateOverrideForks []struct {
+		Time      *uint64 `json:"time,omitempty"`
+		Overrides map[common.Address]struct {
+			Nonce     *hexutil.Uint64             `json:"nonce,omitempty"`
+			Code      *hexutil.Bytes              `json:"code,omitempty"`
+			Balance   *hexutil.Big                `json:"balance,omitempty"`
+			StateDiff map[common.Hash]common.Hash `json:"stateDiff,omitempty"`
+		}
+	} `json:"stateOverrideForks,omitempty"`
+
 	// TerminalTotalDifficulty is the amount of total difficulty reached by
 	// the network that triggers the consensus upgrade.
 	TerminalTotalDifficulty *big.Int `json:"terminalTotalDifficulty,omitempty"`
@@ -676,6 +688,9 @@ func (c *ChainConfig) String() string {
 	}
 	if c.InteropTime != nil {
 		result += fmt.Sprintf(", Interop: %v", *c.InteropTime)
+	}
+	if len(c.StateOverrideForks) > 0 {
+		result += fmt.Sprintf(", StateOverrideForks: %v", len(c.StateOverrideForks))
 	}
 	result += "}"
 	return result
@@ -1165,6 +1180,12 @@ func (c *ChainConfig) CheckConfigForkOrder() error {
 		// If it was optional and not set, then ignore it
 		if !cur.optional || (cur.block != nil || cur.timestamp != nil) {
 			lastFork = cur
+		}
+	}
+
+	for _, override := range c.StateOverrideForks {
+		if override.Time != nil && *override.Time == 0 {
+			return errors.New("cannot schedule a state override for genesis")
 		}
 	}
 

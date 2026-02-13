@@ -179,6 +179,14 @@ func (s *hookedStateDB) AddBalance(addr common.Address, amount *uint256.Int, rea
 	return prev
 }
 
+func (s *hookedStateDB) SetBalance(addr common.Address, amount *uint256.Int, reason tracing.BalanceChangeReason) {
+	prev := s.inner.GetBalance(addr)
+	s.inner.SetBalance(addr, amount, reason)
+	if s.hooks.OnBalanceChange != nil {
+		s.hooks.OnBalanceChange(addr, prev.ToBig(), amount.ToBig(), reason)
+	}
+}
+
 func (s *hookedStateDB) SetNonce(address common.Address, nonce uint64, reason tracing.NonceChangeReason) {
 	prev := s.inner.GetNonce(address)
 	s.inner.SetNonce(address, nonce, reason)
