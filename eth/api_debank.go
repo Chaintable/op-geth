@@ -55,6 +55,9 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 	if chainConfig.DAOForkSupport && chainConfig.DAOForkBlock != nil && chainConfig.DAOForkBlock.Cmp(block.Number()) == 0 {
 		misc.ApplyDAOHardFork(statedb)
 	}
+	if chainConfig.PreContractForkBlock != nil && chainConfig.PreContractForkBlock.Cmp(block.Number()) == 0 {
+		misc.ApplyPreContractHardFork(statedb)
+	}
 
 	var (
 		txs     = block.Transactions()
@@ -64,8 +67,14 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 		usedGas = new(uint64)
 	)
 
+	misc.EnsureCreate2Deployer(chainConfig, header.Time, statedb)
+
 	blockContext := core.NewEVMBlockContext(header, api.eth.blockchain, nil, chainConfig, statedb)
 	vmenv := vm.NewEVM(blockContext, vm.TxContext{}, statedb, chainConfig, vmConfig)
+
+	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
+		core.ProcessBeaconBlockRoot(*beaconRoot, vmenv, statedb)
+	}
 
 	for i, tx := range txs {
 		statedb.SetTxContext(tx.Hash(), i)
