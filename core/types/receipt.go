@@ -464,6 +464,10 @@ func (r *Receipt) DeriveFields(signer Signer, context DeriveReceiptContext) {
 	r.Bloom = CreateBloom(r)
 }
 
+func (r *Receipt) SetEffectiveGasPrice(tx *Transaction, baseFee *big.Int) {
+	r.EffectiveGasPrice = tx.inner.effectiveGasPrice(new(big.Int), baseFee)
+}
+
 // ReceiptForStorage is a wrapper around a Receipt with RLP serialization
 // that omits the Bloom field. The Bloom field is recomputed by DeriveFields.
 type ReceiptForStorage Receipt

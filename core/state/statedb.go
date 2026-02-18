@@ -20,6 +20,7 @@ package state
 import (
 	"errors"
 	"fmt"
+	"github.com/ethereum/go-ethereum/rlp"
 	"maps"
 	"slices"
 	"sync"
@@ -158,6 +159,8 @@ type StateDB struct {
 
 	// singlethreaded avoids creation of additional threads when set to true for compatibility with cannon.
 	singlethreaded bool
+
+	OnCommit tracing.CommitHook
 }
 
 // New creates a new state from a given trie.
@@ -1193,6 +1196,57 @@ func (s *StateDB) GetTrie() Trie {
 	return s.trie
 }
 
+func (s *StateDB) StateDiff(deleteEmptyObjects bool) (root common.Hash, destructs map[common.Hash]struct{}, accounts map[common.Hash][]byte, storages map[common.Hash]map[common.Hash][]byte, codes map[common.Hash][]byte, err error) {
+	root = s.IntermediateRoot(deleteEmptyObjects)
+	destructs = make(map[common.Hash]struct{})
+	accounts = make(map[common.Hash][]byte)
+	storages = make(map[common.Hash]map[common.Hash][]byte)
+	codes = make(map[common.Hash][]byte)
+	var (
+		buf    = crypto.NewKeccakState()
+		encode = func(val common.Hash) []byte {
+			if val == (common.Hash{}) {
+				return nil
+			}
+			blob, _ := rlp.EncodeToBytes(common.TrimLeftZeroes(val[:]))
+			return blob
+		}
+	)
+	for addr, prevObj := range s.stateObjectsDestruct {
+		prev := prevObj.origin
+		if prev == nil {
+			continue
+		}
+		addrHash := crypto.HashData(buf, addr.Bytes())
+		destructs[addrHash] = struct{}{}
+	}
+	for addr, op := range s.mutations {
+		if op.isDelete() {
+			continue
+		}
+		obj := s.stateObjects[addr]
+		if obj == nil {
+			panic("missing state object")
+		}
+		addrHash := crypto.HashData(buf, addr.Bytes())
+		accounts[addrHash] = types.SlimAccountRLP(obj.data)
+		if obj.dirtyCode {
+			codes[common.Hash(obj.CodeHash())] = obj.code
+		}
+		for key, val := range obj.pendingStorage {
+			if val == obj.originStorage[key] {
+				continue
+			}
+			hash := crypto.HashData(buf, key[:])
+			if _, ok := storages[addrHash]; !ok {
+				storages[addrHash] = make(map[common.Hash][]byte)
+			}
+			storages[addrHash][hash] = encode(val)
+		}
+	}
+	return
+}
+
 // commit gathers the state mutations accumulated along with the associated
 // trie changes, resetting all internal flags with the new state as the base.
 func (s *StateDB) commit(deleteEmptyObjects bool, noStorageWiping bool, blockNumber uint64) (*stateUpdate, error) {
@@ -1383,6 +1437,31 @@ func (s *StateDB) commitAndFlush(block uint64, deleteEmptyObjects bool, noStorag
 			}
 			s.SnapshotCommits += time.Since(start)
 		}
+		if s.OnCommit != nil {
+			contracts := make(map[common.Hash][]byte)
+			for _, code := range ret.codes {
+				contracts[code.hash] = code.blob
+			}
+			accounts := make(map[common.Hash][]byte)
+			destructs := make(map[common.Hash]struct{})
+			for k, v := range ret.accounts {
+				if v == nil {
+					destructs[k] = struct{}{}
+				} else {
+					accounts[k] = v
+				}
+			}
+			s.OnCommit(
+				ret.originRoot,
+				ret.root,
+				destructs,
+				accounts,
+				ret.accountsOrigin,
+				ret.storages,
+				ret.storagesOrigin,
+				contracts,
+			)
+		}
 		// If trie database is enabled, commit the state update as a new layer
 		if db := s.db.TrieDB(); db != nil {
 			start := time.Now()
@@ -1541,4 +1620,8 @@ func (s *StateDB) Witness() *stateless.Witness {
 
 func (s *StateDB) AccessEvents() *AccessEvents {
 	return s.accessEvents
+}
+
+func (s *StateDB) SetOnCommitLogger(logger tracing.CommitHook) {
+	s.OnCommit = logger
 }
