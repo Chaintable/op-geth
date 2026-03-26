@@ -35,7 +35,6 @@ import (
 var (
 	ErrInvalidSig           = errors.New("invalid transaction v, r, s values")
 	ErrUnexpectedProtection = errors.New("transaction type does not supported EIP-155 protected signatures")
-	ErrInvalidTxType        = errors.New("transaction type not valid in this context")
 	ErrTxTypeNotSupported   = errors.New("transaction type not supported")
 	ErrGasFeeCapTooLow      = errors.New("fee cap less than base fee")
 	ErrUint256Overflow      = errors.New("bigint overflow, too large for uint256")
@@ -501,14 +500,37 @@ func (tx *Transaction) calcEffectiveGasTip(dst *uint256.Int, baseFee *uint256.In
 	return err
 }
 
+// EffectiveGasTipValue returns the effective gasTip value for the given base fee,
+// even if it would be negative. This can be used for sorting purposes.
+func (tx *Transaction) EffectiveGasTipValue(baseFee *big.Int) *big.Int {
+	// min(gasTipCap, gasFeeCap - baseFee)
+	dst := new(big.Int)
+	if baseFee == nil {
+		dst.Set(tx.inner.gasTipCap())
+		return dst
+	}
+
+	dst.Sub(tx.inner.gasFeeCap(), baseFee) // gasFeeCap - baseFee
+	gasTipCap := tx.inner.gasTipCap()
+	if gasTipCap.Cmp(dst) < 0 { // gasTipCap < (gasFeeCap - baseFee)
+		dst.Set(gasTipCap)
+	}
+	return dst
+}
+
 func (tx *Transaction) EffectiveGasTipCmp(other *Transaction, baseFee *uint256.Int) int {
 	if baseFee == nil {
 		return tx.GasTipCapCmp(other)
 	}
 	// Use more efficient internal method.
 	txTip, otherTip := new(uint256.Int), new(uint256.Int)
-	tx.calcEffectiveGasTip(txTip, baseFee)
-	other.calcEffectiveGasTip(otherTip, baseFee)
+	err1 := tx.calcEffectiveGasTip(txTip, baseFee)
+	err2 := other.calcEffectiveGasTip(otherTip, baseFee)
+	if err1 != nil || err2 != nil {
+		// fall back to big int comparison in case of error
+		base := baseFee.ToBig()
+		return tx.EffectiveGasTipValue(base).Cmp(other.EffectiveGasTipValue(base))
+	}
 	return txTip.Cmp(otherTip)
 }
 
@@ -764,7 +786,7 @@ func TxDifference(a, b Transactions) Transactions {
 func HashDifference(a, b []common.Hash) []common.Hash {
 	keep := make([]common.Hash, 0, len(a))
 
-	remove := make(map[common.Hash]struct{})
+	remove := make(map[common.Hash]struct{}, len(b))
 	for _, hash := range b {
 		remove[hash] = struct{}{}
 	}
