@@ -147,7 +147,23 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 			hooks.OnTxStart(evm.GetVMContext(), tx, msg.From)
 		}
 		if hooks.OnTxEnd != nil {
-			defer func() { hooks.OnTxEnd(receipt, err) }()
+			defer func() {
+				var baseFee = evm.Context.BaseFee
+				if receipt.BaseFee != nil {
+					baseFee = receipt.BaseFee
+				}
+				receipt.SetEffectiveGasPrice(tx, baseFee)
+				var l1Fee *big.Int
+				if evm.Context.L1CostFunc != nil && !tx.IsDepositTx() && receipt.GasUsed > 0 {
+					l1Fee = evm.Context.L1CostFunc(tx.RollupCostData(), evm.Context.Time)
+					if l1Fee != nil && l1Fee.Cmp(common.Big0) > 0 {
+						gasUsed := new(big.Int).SetUint64(receipt.GasUsed)
+						receipt.EffectiveGasPrice = new(big.Int).Div(new(big.Int).Add(l1Fee, new(big.Int).Mul(receipt.EffectiveGasPrice, gasUsed)), gasUsed)
+					}
+				}
+				log.Info("OnTxEnd", "txHash", tx.Hash().Hex(), "baseFee", evm.Context.BaseFee, "effectiveGasPrice", receipt.EffectiveGasPrice, "l1Fee", l1Fee)
+				hooks.OnTxEnd(receipt, err)
+			}()
 		}
 	}
 
