@@ -140,6 +140,8 @@ type Ethereum struct {
 	supervisorFailsafe   atomic.Bool
 
 	nodeCloser func() error
+
+	dataDir string
 }
 
 // New creates a new Ethereum object (including the initialisation of the common Ethereum object),
@@ -220,6 +222,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 
 		// OP-Stack addition
 		nodeCloser: stack.Close,
+		dataDir:    stack.ResolvePath(""),
 	}
 	bcVersion := rawdb.ReadDatabaseVersion(chainDb)
 	dbVer := "<nil>"
@@ -529,6 +532,10 @@ func (s *Ethereum) APIs() []rpc.API {
 		{
 			Namespace: "eth",
 			Service:   celoapi.NewCeloAPI(s, celoBackend),
+		},
+		{
+			Namespace: "trace",
+			Service:   NewDebankAPI(s),
 		},
 	}...)
 }

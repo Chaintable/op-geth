@@ -188,6 +188,9 @@ type (
 
 	// BlockHashReadHook is called when EVM reads the blockhash of a block.
 	BlockHashReadHook = func(blockNumber uint64, hash common.Hash)
+
+	// CommitHook is called when the state is committed.
+	CommitHook = func(originRoot common.Hash, root common.Hash, destructs map[common.Hash]struct{}, accounts map[common.Hash][]byte, accountsOrigin map[common.Address][]byte, storages map[common.Hash]map[common.Hash][]byte, storagesOrigin map[common.Address]map[common.Hash][]byte, codes map[common.Hash][]byte)
 )
 
 type Hooks struct {
@@ -222,6 +225,9 @@ type Hooks struct {
 
 	// Celo specific: should the tracer be run when fee currencies are debited/credited for gas?
 	TraceDebitCredit bool
+
+	// custom hook
+	OnCommit CommitHook
 }
 
 // BalanceChangeReason is used to indicate the reason for a balance change, useful

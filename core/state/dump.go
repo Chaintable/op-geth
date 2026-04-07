@@ -19,6 +19,8 @@ package state
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -66,6 +68,14 @@ type Dump struct {
 	// Next can be set to represent that this dump is only partial, and Next
 	// is where an iterator should be positioned in order to continue the dump.
 	Next []byte `json:"next,omitempty"` // nil if no more accounts
+}
+
+type ProgressDump struct {
+	ExportedCount uint64 `json:"exported_count"`
+	NextKey       []byte `json:"next_key,omitempty"`
+	Root          string `json:"root"`
+	IsComplete    bool   `json:"is_complete"`
+	BatchCount    int    `json:"batch_count"`
 }
 
 // OnRoot implements DumpCollector interface
@@ -244,4 +254,140 @@ func (s *StateDB) Dump(opts *DumpConfig) []byte {
 // IterativeDump dumps out accounts as json-objects, delimited by linebreaks on stdout
 func (s *StateDB) IterativeDump(opts *DumpConfig, output *json.Encoder) {
 	s.DumpToCollector(iterativeDump{output}, opts)
+}
+
+func (s *StateDB) loadProgressFile(filePath string) (*ProgressDump, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+	var progress ProgressDump
+	if err := json.Unmarshal(data, &progress); err != nil {
+		return nil, err
+	}
+	return &progress, nil
+}
+
+func (s *StateDB) saveProgressFile(filePath string, progress *ProgressDump) error {
+	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+		return err
+	}
+	data, err := json.Marshal(progress)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filePath, data, 0644)
+}
+
+func (s *StateDB) saveBatchFile(batchDir string, batchNum int, accounts map[string]DumpAccount) error {
+	if err := os.MkdirAll(batchDir, 0755); err != nil {
+		return err
+	}
+	batchFile := filepath.Join(batchDir, fmt.Sprintf("batch_%d.json", batchNum))
+	data, err := json.Marshal(accounts)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(batchFile, data, 0644)
+}
+
+func (s *StateDB) loadAllBatches(batchDir string, batchCount int) (map[string]DumpAccount, error) {
+	allAccounts := make(map[string]DumpAccount)
+	for i := 1; i <= batchCount; i++ {
+		batchFile := filepath.Join(batchDir, fmt.Sprintf("batch_%d.json", i))
+		data, err := os.ReadFile(batchFile)
+		if err != nil {
+			return nil, err
+		}
+		var batchAccounts map[string]DumpAccount
+		if err := json.Unmarshal(data, &batchAccounts); err != nil {
+			return nil, err
+		}
+		for addr, acc := range batchAccounts {
+			allAccounts[addr] = acc
+		}
+	}
+	return allAccounts, nil
+}
+
+func (s *StateDB) RawDump2(opts *DumpConfig, dataDir string) Dump {
+	const batchSize = 10000
+	progressDir := filepath.Join(dataDir, "dump_bedrock_genesis")
+	progressFile := filepath.Join(progressDir, "progress.json")
+	batchDir := filepath.Join(progressDir, "batches")
+
+	progress, err := s.loadProgressFile(progressFile)
+	if err != nil {
+		progress = &ProgressDump{}
+	}
+
+	if progress.IsComplete {
+		allAccounts, err := s.loadAllBatches(batchDir, progress.BatchCount)
+		if err != nil {
+			log.Error("Failed to load batch files", "err", err)
+			return Dump{}
+		}
+		return Dump{
+			Root:     progress.Root,
+			Accounts: allAccounts,
+		}
+	}
+
+	if progress.Root == "" {
+		progress.Root = fmt.Sprintf("%x", s.trie.Hash())
+	}
+
+	batchOpts := &DumpConfig{
+		SkipCode:          opts.SkipCode,
+		SkipStorage:       opts.SkipStorage,
+		OnlyWithAddresses: opts.OnlyWithAddresses,
+		Start:             progress.NextKey,
+		Max:               batchSize,
+	}
+
+	for {
+		batchDump := &Dump{
+			Accounts: make(map[string]DumpAccount),
+		}
+
+		nextKey := s.DumpToCollector(batchDump, batchOpts)
+
+		if len(batchDump.Accounts) > 0 {
+			progress.BatchCount++
+			progress.ExportedCount += uint64(len(batchDump.Accounts))
+
+			if err := s.saveBatchFile(batchDir, progress.BatchCount, batchDump.Accounts); err != nil {
+				log.Error("Failed to save batch file", "batch", progress.BatchCount, "err", err)
+				return Dump{}
+			}
+		}
+
+		progress.NextKey = nextKey
+		if nextKey == nil {
+			progress.IsComplete = true
+		}
+
+		if err := s.saveProgressFile(progressFile, progress); err != nil {
+			log.Error("Failed to save progress", "err", err)
+		}
+
+		log.Info("Batch completed", "batch", progress.BatchCount, "exported", progress.ExportedCount, "complete", progress.IsComplete)
+
+		if progress.IsComplete {
+			break
+		}
+
+		batchOpts.Start = nextKey
+	}
+
+	allAccounts, err := s.loadAllBatches(batchDir, progress.BatchCount)
+	if err != nil {
+		log.Error("Failed to load all batches", "err", err)
+		return Dump{}
+	}
+
+	return Dump{
+		Root:     progress.Root,
+		Accounts: allAccounts,
+	}
 }
