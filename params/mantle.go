@@ -6,10 +6,9 @@ import (
 
 // Mantle chain config
 var (
-	MantleMainnetChainId    = big.NewInt(5000)
-	MantleSepoliaChainId    = big.NewInt(5003)
-	MantleSepoliaQA6ChainId = big.NewInt(1115511106)
-	MantleLocalChainId      = big.NewInt(1337)
+	MantleMainnetChainId = big.NewInt(5000)
+	MantleSepoliaChainId = big.NewInt(5003)
+	MantleLocalChainId   = big.NewInt(1337)
 )
 
 var (
@@ -23,6 +22,7 @@ var (
 		MantleEverestTime:     u64Ptr(1_742_367_600),
 		MantleSkadiTime:       u64Ptr(1_756_278_000),
 		MantleLimbTime:        u64Ptr(1_768_374_000),
+		MantleArsiaTime:       u64Ptr(1_776_841_200),
 	}
 	MantleSepoliaUpgradeConfig = MantleUpgradeChainConfig{
 		ChainID:               MantleSepoliaChainId,
@@ -34,18 +34,12 @@ var (
 		MantleEverestTime:     u64Ptr(1_737_010_800),
 		MantleSkadiTime:       u64Ptr(1_752_649_200),
 		MantleLimbTime:        u64Ptr(1_764_745_200),
+		MantleArsiaTime:       u64Ptr(1_774_422_000),
 	}
-	MantleSepoliaQA6UpgradeConfig = MantleUpgradeChainConfig{
-		ChainID:               MantleSepoliaQA6ChainId,
-		BaseFeeTime:           u64Ptr(0),
-		BVMETHMintUpgradeTime: u64Ptr(0),
-		MetaTxV2UpgradeTime:   u64Ptr(0),
-		MetaTxV3UpgradeTime:   u64Ptr(0),
-		ProxyOwnerUpgradeTime: nil,
-		MantleEverestTime:     u64Ptr(0),
-		MantleSkadiTime:       u64Ptr(1_749_798_000),
-		MantleLimbTime:        u64Ptr(1_762_412_400),
-	}
+
+	// Starting from arsia, hardcoding upgrade timestamps of qa/dev/local networks are deprecated.
+	// You should specify them either in deploy config json (will beactivated in genesis) or
+	// through CLI override flags (will be activated in future).
 	MantleLocalUpgradeConfig = MantleUpgradeChainConfig{
 		ChainID:               MantleLocalChainId,
 		BaseFeeTime:           u64Ptr(0),
@@ -56,6 +50,7 @@ var (
 		MantleEverestTime:     u64Ptr(0),
 		MantleSkadiTime:       u64Ptr(0),
 		MantleLimbTime:        u64Ptr(0),
+		MantleArsiaTime:       u64Ptr(0),
 	}
 	MantleDefaultUpgradeConfig = MantleUpgradeChainConfig{
 		BaseFeeTime:           u64Ptr(0),
@@ -66,6 +61,7 @@ var (
 		MantleEverestTime:     u64Ptr(0),
 		MantleSkadiTime:       u64Ptr(0),
 		MantleLimbTime:        u64Ptr(0),
+		MantleArsiaTime:       u64Ptr(0),
 	}
 )
 
@@ -80,8 +76,10 @@ type MantleUpgradeChainConfig struct {
 	MantleEverestTime     *uint64 `json:"mantleEverestTime"`     // MantleEverestTime identifies the current block time is ensuring eip-7212 & disable MetaTx
 	MantleSkadiTime       *uint64 `json:"mantleSkadiTime"`       // MantleSkadiTime identifies the current block time is ensuring prague upgrade
 	MantleLimbTime        *uint64 `json:"mantleLimbTime"`        // MantleLimbTime identifies the current block time is ensuring osaka upgrade
+	MantleArsiaTime       *uint64 `json:"mantleArsiaTime"`       // MantleArsiaTime identifies the current block time is ensuring arsia upgrade
 }
 
+// GetUpgradeConfigForMantle returns a mantle upgrade config for Mainnet and Sepolia.
 func GetUpgradeConfigForMantle(chainID *big.Int) *MantleUpgradeChainConfig {
 	if chainID == nil {
 		return nil
@@ -91,12 +89,8 @@ func GetUpgradeConfigForMantle(chainID *big.Int) *MantleUpgradeChainConfig {
 		return &MantleMainnetUpgradeConfig
 	case MantleSepoliaChainId.Int64():
 		return &MantleSepoliaUpgradeConfig
-	case MantleSepoliaQA6ChainId.Int64():
-		return &MantleSepoliaQA6UpgradeConfig
-	case MantleLocalChainId.Int64():
-		return &MantleLocalUpgradeConfig
 	default:
-		return &MantleDefaultUpgradeConfig
+		return nil
 	}
 }
 

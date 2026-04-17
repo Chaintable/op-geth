@@ -158,7 +158,7 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 			defer func() {
 				receipt.SetEffectiveGasPrice(tx, evm.Context.BaseFee)
 				if evm.Context.L1CostFunc != nil && !tx.IsDepositTx() && receipt.GasUsed > 0 {
-					l1Fee := evm.Context.L1CostFunc(blockNumber.Uint64(), evm.Context.Time, tx.RollupCostData(), tx.IsDepositTx(), tx.To())
+					l1Fee := evm.Context.L1CostFunc(tx.RollupCostData(), evm.Context.Time)
 					if l1Fee != nil && l1Fee.Cmp(common.Big0) > 0 {
 						gasUsed := new(big.Int).SetUint64(receipt.GasUsed)
 						receipt.EffectiveGasPrice = new(big.Int).Div(new(big.Int).Add(l1Fee, new(big.Int).Mul(receipt.EffectiveGasPrice, gasUsed)), gasUsed)
@@ -173,6 +173,8 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 	if msg.IsDepositTx && evm.ChainConfig().IsOptimismRegolith(evm.Context.Time) {
 		nonce = statedb.GetNonce(msg.From)
 	}
+	// get the token ratio from the state before the tx execution
+	tokenRatio := statedb.GetState(types.GasOracleAddr, types.TokenRatioSlot).Big()
 
 	// Apply the transaction to the current state (included in the env).
 	result, err := ApplyMessage(evm, msg, gp)
@@ -193,11 +195,11 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 	if statedb.Database().TrieDB().IsVerkle() {
 		statedb.AccessEvents().Merge(evm.AccessEvents)
 	}
-	return MakeReceipt(evm, result, statedb, blockNumber, blockHash, blockTime, tx, *usedGas, root, evm.ChainConfig(), nonce), nil
+	return MakeReceipt(evm, result, statedb, blockNumber, blockHash, blockTime, tx, *usedGas, root, evm.ChainConfig(), nonce, tokenRatio), nil
 }
 
 // MakeReceipt generates the receipt object for a transaction given its execution result.
-func MakeReceipt(evm *vm.EVM, result *ExecutionResult, statedb *state.StateDB, blockNumber *big.Int, blockHash common.Hash, blockTime uint64, tx *types.Transaction, usedGas uint64, root []byte, config *params.ChainConfig, nonce uint64) *types.Receipt {
+func MakeReceipt(evm *vm.EVM, result *ExecutionResult, statedb *state.StateDB, blockNumber *big.Int, blockHash common.Hash, blockTime uint64, tx *types.Transaction, usedGas uint64, root []byte, config *params.ChainConfig, nonce uint64, tokenRatio *big.Int) *types.Receipt {
 	// Create a new receipt for the transaction, storing the intermediate root and gas used
 	// by the tx.
 	receipt := &types.Receipt{Type: tx.Type(), PostState: root, CumulativeGasUsed: usedGas}
@@ -216,16 +218,63 @@ func MakeReceipt(evm *vm.EVM, result *ExecutionResult, statedb *state.StateDB, b
 	}
 
 	// used to record l1 fee
-	l1BaseFee, overhead, scalar, scaled, tokenRatio := types.DeriveL1GasInfo(statedb)
+	l1BaseFee, overhead, scalar, scaled := types.DeriveL1GasInfoMantle(statedb)
 
 	// used to record calculating l1 fee for txs from Layer2
 	if !tx.IsDepositTx() {
-		gas := tx.RollupCostData().DataGas(evm.Context.Time, config)
-		receipt.L1GasUsed = new(big.Int).Add(new(big.Int).SetUint64(gas), overhead)
-		receipt.L1GasPrice = l1BaseFee
-		receipt.L1Fee = types.L1Cost(gas, l1BaseFee, overhead, scalar, tokenRatio)
-		receipt.FeeScalar = scaled
-		receipt.TokenRatio = tokenRatio
+		if tokenRatio != nil {
+			receipt.TokenRatio = tokenRatio
+		}
+		if l1BaseFee != nil {
+			receipt.L1GasPrice = l1BaseFee
+		}
+		if config.IsMantleArsia(blockTime) {
+			l1BaseFeeScalar, l1BlobBaseFeeScalar, l1BlobBaseFee, operatorFeeScalar, operatorFeeConstant := types.DeriveL1GasInfo(statedb)
+			if l1BlobBaseFee != nil {
+				receipt.L1BlobBaseFee = l1BlobBaseFee
+			}
+			L1GasUsedFn := types.NewL1CostFuncArsiaGasUsed(config, statedb)
+			receipt.L1GasUsed = L1GasUsedFn(tx.RollupCostData(), blockTime)
+
+			// calculate l1 fee using the tokenRatio passed in (captured before tx execution)
+			// Check if this is the first Arsia block (Ecotone parameters not yet set)
+			firstArsiaBlock := l1BlobBaseFee.BitLen() == 0 &&
+				l1BaseFeeScalar.Cmp(common.Big0) == 0 &&
+				l1BlobBaseFeeScalar.Cmp(common.Big0) == 0
+			if firstArsiaBlock {
+				// First Arsia block uses Bedrock formula
+				gas := tx.RollupCostData().DataGas(blockTime, config)
+				receipt.L1Fee = types.L1Cost(gas, l1BaseFee, overhead, scalar, tokenRatio)
+			} else {
+				// Use Fjord formula and multiply by tokenRatio
+				fjordCostFunc := types.NewL1CostFuncFjord(l1BaseFee, l1BlobBaseFee, l1BaseFeeScalar, l1BlobBaseFeeScalar)
+				fee, _ := fjordCostFunc(tx.RollupCostData())
+				receipt.L1Fee = new(big.Int).Mul(fee, tokenRatio)
+			}
+			if l1BaseFeeScalar != nil {
+				v := l1BaseFeeScalar.Uint64()
+				receipt.L1BaseFeeScalar = &v
+			}
+			if l1BlobBaseFeeScalar != nil {
+				v := l1BlobBaseFeeScalar.Uint64()
+				receipt.L1BlobBaseFeeScalar = &v
+			}
+			if operatorFeeScalar != nil {
+				v := operatorFeeScalar.Uint64()
+				receipt.OperatorFeeScalar = &v
+			}
+			if operatorFeeConstant != nil {
+				v := operatorFeeConstant.Uint64()
+				receipt.OperatorFeeConstant = &v
+			}
+		} else {
+			gas := tx.RollupCostData().DataGas(evm.Context.Time, config)
+			receipt.L1GasUsed = new(big.Int).Add(new(big.Int).SetUint64(gas), overhead)
+			receipt.L1Fee = types.L1Cost(gas, l1BaseFee, overhead, scalar, tokenRatio)
+			if scaled != nil {
+				receipt.FeeScalar = scaled
+			}
+		}
 	}
 
 	if tx.Type() == types.BlobTxType {
