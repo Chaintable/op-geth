@@ -310,7 +310,128 @@ func (s *StateDB) loadAllBatches(batchDir string, batchCount int) (map[string]Du
 	return allAccounts, nil
 }
 
-func (s *StateDB) RawDump2(opts *DumpConfig, dataDir string) Dump {
+func (s *StateDB) dumpToCollector2(c DumpCollector, conf *DumpConfig) (nextKey []byte, err error) {
+	if conf == nil {
+		conf = new(DumpConfig)
+	}
+	var (
+		missingPreimages        int
+		missingStoragePreimages int
+		storageTrieErrors       int
+		accounts                uint64
+		start                   = time.Now()
+		logged                  = time.Now()
+	)
+	log.Info("[GenesisStateDump] Trie dumping started", "root", s.originalRoot)
+	c.OnRoot(s.originalRoot)
+
+	tr, err := s.db.OpenTrie(s.originalRoot)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open state trie at root %x: %w", s.originalRoot, err)
+	}
+	trieIt, err := tr.NodeIterator(conf.Start)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create trie iterator at root %x: %w", s.originalRoot, err)
+	}
+	it := trie.NewIterator(trieIt)
+
+	for it.Next() {
+		var data types.StateAccount
+		if err := rlp.DecodeBytes(it.Value, &data); err != nil {
+			panic(err)
+		}
+		var (
+			account = DumpAccount{
+				Balance:     data.Balance.String(),
+				Nonce:       data.Nonce,
+				Root:        data.Root[:],
+				CodeHash:    data.CodeHash,
+				AddressHash: it.Key,
+			}
+			address   *common.Address
+			addr      common.Address
+			addrBytes = tr.GetKey(it.Key)
+		)
+		if addrBytes == nil {
+			missingPreimages++
+			if conf.OnlyWithAddresses {
+				continue
+			}
+		} else {
+			addr = common.BytesToAddress(addrBytes)
+			address = &addr
+			account.Address = address
+		}
+		obj := newObject(s, addr, &data)
+		if !conf.SkipCode {
+			account.Code = obj.Code()
+		}
+		if !conf.SkipStorage {
+			account.Storage = make(map[common.Hash]string)
+
+			storageTr, err := s.db.OpenStorageTrie(s.originalRoot, addr, obj.Root(), tr)
+			if err != nil {
+				storageTrieErrors++
+				log.Error("[GenesisStateDump] Failed to load storage trie, account storage will be MISSING",
+					"addr", addr, "storageRoot", obj.Root(), "err", err)
+				continue
+			}
+			trieIt, err := storageTr.NodeIterator(nil)
+			if err != nil {
+				storageTrieErrors++
+				log.Error("[GenesisStateDump] Failed to create storage trie iterator, account storage will be MISSING",
+					"addr", addr, "storageRoot", obj.Root(), "err", err)
+				continue
+			}
+			storageIt := trie.NewIterator(trieIt)
+			for storageIt.Next() {
+				_, content, _, err := rlp.Split(storageIt.Value)
+				if err != nil {
+					log.Error("[GenesisStateDump] Failed to decode the value returned by iterator", "error", err)
+					continue
+				}
+				key := storageTr.GetKey(storageIt.Key)
+				if key == nil {
+					missingStoragePreimages++
+					continue
+				}
+				account.Storage[common.BytesToHash(key)] = common.Bytes2Hex(content)
+			}
+		}
+		c.OnAccount(address, account)
+		accounts++
+		if time.Since(logged) > 8*time.Second {
+			log.Info("[GenesisStateDump] Trie dumping in progress", "at", common.Bytes2Hex(it.Key), "accounts", accounts,
+				"elapsed", common.PrettyDuration(time.Since(start)))
+			logged = time.Now()
+		}
+		if conf.Max > 0 && accounts >= conf.Max {
+			if it.Next() {
+				nextKey = it.Key
+			}
+			break
+		}
+	}
+	if missingPreimages > 0 {
+		log.Warn("[GenesisStateDump] Dump incomplete due to missing preimages", "missing", missingPreimages)
+	}
+	if missingStoragePreimages > 0 {
+		log.Warn("[GenesisStateDump] Dump has missing storage key preimages, some storage slots were skipped",
+			"missingStoragePreimages", missingStoragePreimages)
+	}
+	if storageTrieErrors > 0 {
+		log.Error("[GenesisStateDump] Dump has storage trie errors, some accounts have MISSING storage",
+			"storageTrieErrors", storageTrieErrors)
+	}
+	log.Info("[GenesisStateDump] Trie dumping complete", "accounts", accounts,
+		"missingStoragePreimages", missingStoragePreimages,
+		"storageTrieErrors", storageTrieErrors,
+		"elapsed", common.PrettyDuration(time.Since(start)))
+
+	return nextKey, nil
+}
+
+func (s *StateDB) RawDump2(opts *DumpConfig, dataDir string) (Dump, error) {
 	const batchSize = 10000
 	progressDir := filepath.Join(dataDir, "dump_bedrock_genesis")
 	progressFile := filepath.Join(progressDir, "progress.json")
@@ -324,13 +445,13 @@ func (s *StateDB) RawDump2(opts *DumpConfig, dataDir string) Dump {
 	if progress.IsComplete {
 		allAccounts, err := s.loadAllBatches(batchDir, progress.BatchCount)
 		if err != nil {
-			log.Error("Failed to load batch files", "err", err)
-			return Dump{}
+			log.Error("[GenesisStateDump] Failed to load batch files", "err", err)
+			return Dump{}, fmt.Errorf("failed to load batch files: %w", err)
 		}
 		return Dump{
 			Root:     progress.Root,
 			Accounts: allAccounts,
-		}
+		}, nil
 	}
 
 	if progress.Root == "" {
@@ -350,28 +471,38 @@ func (s *StateDB) RawDump2(opts *DumpConfig, dataDir string) Dump {
 			Accounts: make(map[string]DumpAccount),
 		}
 
-		nextKey := s.DumpToCollector(batchDump, batchOpts)
+		nextKey, err := s.dumpToCollector2(batchDump, batchOpts)
+		if err != nil {
+			log.Error("[GenesisStateDump] dumpToCollector2 failed during RawDump2", "batch", progress.BatchCount+1, "err", err)
+			return Dump{}, fmt.Errorf("dumpToCollector2 failed at batch %d: %w", progress.BatchCount+1, err)
+		}
 
 		if len(batchDump.Accounts) > 0 {
 			progress.BatchCount++
 			progress.ExportedCount += uint64(len(batchDump.Accounts))
 
 			if err := s.saveBatchFile(batchDir, progress.BatchCount, batchDump.Accounts); err != nil {
-				log.Error("Failed to save batch file", "batch", progress.BatchCount, "err", err)
-				return Dump{}
+				log.Error("[GenesisStateDump] Failed to save batch file", "batch", progress.BatchCount, "err", err)
+				return Dump{}, fmt.Errorf("failed to save batch file %d: %w", progress.BatchCount, err)
 			}
 		}
 
 		progress.NextKey = nextKey
 		if nextKey == nil {
-			progress.IsComplete = true
+			if progress.ExportedCount > 0 {
+				progress.IsComplete = true
+			} else {
+				log.Error("[GenesisStateDump] RawDump2 produced zero accounts, refusing to mark as complete",
+					"root", progress.Root)
+				return Dump{}, fmt.Errorf("dump produced zero accounts for root %s, state trie may be inaccessible", progress.Root)
+			}
 		}
 
 		if err := s.saveProgressFile(progressFile, progress); err != nil {
-			log.Error("Failed to save progress", "err", err)
+			log.Error("[GenesisStateDump] Failed to save progress", "err", err)
 		}
 
-		log.Info("Batch completed", "batch", progress.BatchCount, "exported", progress.ExportedCount, "complete", progress.IsComplete)
+		log.Info("[GenesisStateDump] Batch completed", "batch", progress.BatchCount, "exported", progress.ExportedCount, "complete", progress.IsComplete)
 
 		if progress.IsComplete {
 			break
@@ -382,12 +513,12 @@ func (s *StateDB) RawDump2(opts *DumpConfig, dataDir string) Dump {
 
 	allAccounts, err := s.loadAllBatches(batchDir, progress.BatchCount)
 	if err != nil {
-		log.Error("Failed to load all batches", "err", err)
-		return Dump{}
+		log.Error("[GenesisStateDump] Failed to load all batches", "err", err)
+		return Dump{}, fmt.Errorf("failed to load all batches: %w", err)
 	}
 
 	return Dump{
 		Root:     progress.Root,
 		Accounts: allAccounts,
-	}
+	}, nil
 }

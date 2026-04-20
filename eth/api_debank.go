@@ -245,13 +245,13 @@ func (api *DebankAPI) prepareL1Data() {
 		api.mutex.Unlock()
 
 		if err != nil {
-			log.Error("l1 block data preparation failed", "blockNumber", L2BlockNumber, "error", err)
+			log.Error("[GenesisStateDump] l1 block data preparation failed", "blockNumber", L2BlockNumber, "error", err)
 		} else {
-			log.Info("l1 block data preparation completed", "blockNumber", L2BlockNumber)
+			log.Info("[GenesisStateDump] l1 block data preparation completed", "blockNumber", L2BlockNumber)
 		}
 	}()
 
-	log.Info("Starting to prepare l1 block data", "blockNumber", L2BlockNumber)
+	log.Info("[GenesisStateDump] Starting to prepare l1 block data", "blockNumber", L2BlockNumber)
 
 	block := api.eth.blockchain.GetBlockByNumber(L2BlockNumber)
 	if block == nil {
@@ -265,13 +265,17 @@ func (api *DebankAPI) prepareL1Data() {
 		return
 	}
 
-	dump := stateDB.RawDump2(&state.DumpConfig{
+	dump, dumpErr := stateDB.RawDump2(&state.DumpConfig{
 		SkipCode:          false,
 		SkipStorage:       false,
 		OnlyWithAddresses: false,
 	}, api.eth.dataDir)
+	if dumpErr != nil {
+		err = fmt.Errorf("failed to dump state at l1 block: %w", dumpErr)
+		return
+	}
 
-	log.Info("State dump completed", "accounts", len(dump.Accounts))
+	log.Info("[GenesisStateDump] State dump completed", "accounts", len(dump.Accounts))
 
 	stateDiff := convertStateDumpToBlockStorageDiff(dump, block)
 	blockFile := buildPipelineBlockFile(block)
@@ -368,7 +372,7 @@ func convertStateDumpToBlockStorageDiff(dump state.Dump, block *types.Block) *pt
 		}
 	}
 
-	log.Info("Converted state dump to storage diff",
+	log.Info("[GenesisStateDump] Converted state dump to storage diff",
 		"totalAccounts", len(dump.Accounts),
 		"withPreimage", withPreimageCount,
 		"withoutPreimage", withoutPreimageCount,
