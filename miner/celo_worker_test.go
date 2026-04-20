@@ -155,7 +155,7 @@ func TestMinerFillTransactionsOrdering(t *testing.T) {
 
 	stateDb, err := miner.backend.BlockChain().StateAt(parentHeader.Root)
 	require.NoError(t, err)
-	rates := core.GetExchangeRates(parentHeader, miner.chainConfig, stateDb)
+	rates := core.GetFeeCurrencyContext(parentHeader, miner.chainConfig, stateDb).ExchangeRates
 
 	// Creates a slice of transactions while validating effective gas prices
 	txs := make([]*types.Transaction, len(txAndExpectedEffectiveTips))

@@ -12,7 +12,7 @@ import (
 )
 
 var (
-	transferPrecompileAddress = common.HexToAddress("0x00000000000000000000000000000000000000fd")
+	TransferPrecompileAddress = common.HexToAddress("0x00000000000000000000000000000000000000fd")
 )
 
 type CeloPrecompiledContract interface {
@@ -59,6 +59,11 @@ func (c *transfer) RequiredGas(input []byte) uint64 {
 }
 
 func (c *transfer) Run(input []byte, ctx *celoPrecompileContext) ([]byte, error) {
+	// STATICCALL protection: prevent state changes in read-only context
+	if ctx.evm.readOnly {
+		return nil, ErrWriteProtection
+	}
+
 	if isCeloToken, err := ctx.IsCallerCeloToken(); err != nil {
 		return nil, err
 	} else if !isCeloToken {
@@ -91,6 +96,17 @@ func (c *transfer) Run(input []byte, ctx *celoPrecompileContext) ([]byte, error)
 	valueU256, overflow := uint256.FromBig(value)
 	if overflow {
 		return nil, fmt.Errorf("Error parsing transfer: value overflow")
+	}
+
+	// The mockEVM doesn't have a StateDB set up, so ctx.evm.StateDB is nil
+	// in the tests. We could add a mockStateDB to it to avoid this check.
+	if ctx.evm.StateDB != nil && ctx.IsOptimismJovian {
+		// Warm the from and to addresses by adding them to the access list. We didn't
+		// do this when Celo launched, but it is more consistent with Ethereum, where
+		// all accessed addresses are always warmed.
+		// See also https://github.com/celo-org/celo-blockchain-planning/issues/1226
+		ctx.evm.StateDB.AddAddressToAccessList(from)
+		ctx.evm.StateDB.AddAddressToAccessList(to)
 	}
 
 	// Fail if we're trying to transfer more than the available balance

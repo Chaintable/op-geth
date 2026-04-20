@@ -83,7 +83,8 @@ func testPrestateTracer(tracerName string, dirPath string, t *testing.T) {
 				tx   = new(types.Transaction)
 			)
 			// Call tracer test found, read if from disk
-			if blob, err := os.ReadFile(filepath.Join("testdata", dirPath, file.Name())); err != nil {
+			path := filepath.Join("testdata", dirPath, file.Name())
+			if blob, err := os.ReadFile(path); err != nil {
 				t.Fatalf("failed to read testcase: %v", err)
 			} else if err := json.Unmarshal(blob, test); err != nil {
 				t.Fatalf("failed to parse testcase: %v", err)
@@ -116,6 +117,9 @@ func testPrestateTracer(tracerName string, dirPath string, t *testing.T) {
 			vmRet, err := core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(tx.Gas()))
 			if err != nil {
 				t.Fatalf("failed to execute transaction: %v", err)
+			}
+			if vmRet.Failed() {
+				t.Logf("(warn) transaction failed: %v", vmRet.Err)
 			}
 			tracer.OnTxEnd(&types.Receipt{GasUsed: vmRet.UsedGas}, nil)
 			// Retrieve the trace result and compare against the expected

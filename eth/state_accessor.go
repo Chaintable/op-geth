@@ -182,10 +182,11 @@ func (eth *Ethereum) pathState(block *types.Block) (*state.StateDB, func(), erro
 	if err == nil {
 		return statedb, noopReleaser, nil
 	}
-	// TODO historic state is not supported in path-based scheme.
-	// Fully archive node in pbss will be implemented by relying
-	// on state history, but needs more work on top.
-	return nil, nil, errors.New("historical state not available in path scheme yet")
+	statedb, err = eth.blockchain.HistoricState(block.Root())
+	if err == nil {
+		return statedb, noopReleaser, nil
+	}
+	return nil, nil, errors.New("historical state is not available")
 }
 
 // stateAtBlock retrieves the state database associated with a certain block.
@@ -217,22 +218,28 @@ func (eth *Ethereum) stateAtBlock(ctx context.Context, block *types.Block, reexe
 	return eth.pathState(block)
 }
 
-// stateAtTransaction returns the execution environment of a certain transaction.
-func (eth *Ethereum) stateAtTransaction(ctx context.Context, block *types.Block, txIndex int, reexec uint64) (*types.Transaction, vm.BlockContext, *state.StateDB, tracers.StateReleaseFunc, *common.FeeCurrencyContext, error) {
+// stateAtTransaction returns the execution environment of a certain
+// transaction.
+//
+// Note: when a block is empty and the state for tx index 0 is requested, this
+// function will return the state of block after the pre-block operations have
+// been completed (e.g. updating system contracts), but before post-block
+// operations are completed (e.g. processing withdrawals).
+func (eth *Ethereum) stateAtTransaction(ctx context.Context, block *types.Block, txIndex int, reexec uint64) (*types.Transaction, vm.BlockContext, *state.StateDB, tracers.StateReleaseFunc, error) {
 	// Short circuit if it's genesis block.
 	if block.NumberU64() == 0 {
-		return nil, vm.BlockContext{}, nil, nil, nil, errors.New("no transaction in genesis")
+		return nil, vm.BlockContext{}, nil, nil, errors.New("no transaction in genesis")
 	}
 	// Create the parent state database
 	parent := eth.blockchain.GetBlock(block.ParentHash(), block.NumberU64()-1)
 	if parent == nil {
-		return nil, vm.BlockContext{}, nil, nil, nil, fmt.Errorf("parent %#x not found", block.ParentHash())
+		return nil, vm.BlockContext{}, nil, nil, fmt.Errorf("parent %#x not found", block.ParentHash())
 	}
 	// Lookup the statedb of parent block from the live database,
 	// otherwise regenerate it on the flight.
 	statedb, release, err := eth.stateAtBlock(ctx, parent, reexec, nil, true, false)
 	if err != nil {
-		return nil, vm.BlockContext{}, nil, nil, nil, err
+		return nil, vm.BlockContext{}, nil, nil, err
 	}
 	feeCurrencyContext := core.GetFeeCurrencyContext(block.Header(), eth.blockchain.Config(), statedb)
 	// Insert parent beacon block root in the state as per EIP-4788.
@@ -246,13 +253,13 @@ func (eth *Ethereum) stateAtTransaction(ctx context.Context, block *types.Block,
 		core.ProcessParentBlockHash(block.ParentHash(), evm)
 	}
 	if txIndex == 0 && len(block.Transactions()) == 0 {
-		return nil, vm.BlockContext{}, statedb, release, feeCurrencyContext, nil
+		return nil, context, statedb, release, nil
 	}
 	// Recompute transactions up to the target index.
 	signer := types.MakeSigner(eth.blockchain.Config(), block.Number(), block.Time())
 	for idx, tx := range block.Transactions() {
 		if idx == txIndex {
-			return tx, context, statedb, release, feeCurrencyContext, nil
+			return tx, context, statedb, release, nil
 		}
 		// Assemble the transaction call message and return if the requested offset
 		msg, _ := core.TransactionToMessage(tx, signer, block.BaseFee(), context.FeeCurrencyContext.ExchangeRates)
@@ -260,11 +267,11 @@ func (eth *Ethereum) stateAtTransaction(ctx context.Context, block *types.Block,
 		// Not yet the searched for transaction, execute on top of the current state
 		statedb.SetTxContext(tx.Hash(), idx)
 		if _, err := core.ApplyMessage(evm, msg, new(core.GasPool).AddGas(tx.Gas())); err != nil {
-			return nil, vm.BlockContext{}, nil, nil, nil, fmt.Errorf("transaction %#x failed: %v", tx.Hash(), err)
+			return nil, vm.BlockContext{}, nil, nil, fmt.Errorf("transaction %#x failed: %v", tx.Hash(), err)
 		}
 		// Ensure any modifications are committed to the state
 		// Only delete empty objects if EIP158/161 (a.k.a Spurious Dragon) is in effect
 		statedb.Finalise(evm.ChainConfig().IsEIP158(block.Number()))
 	}
-	return nil, vm.BlockContext{}, nil, nil, nil, fmt.Errorf("transaction index %d out of range for block %#x", txIndex, block.Hash())
+	return nil, vm.BlockContext{}, nil, nil, fmt.Errorf("transaction index %d out of range for block %#x", txIndex, block.Hash())
 }

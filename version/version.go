@@ -24,8 +24,8 @@ import (
 // Upstream geth version
 const (
 	Major = 1        // Major version component of the current release
-	Minor = 15       // Minor version component of the current release
-	Patch = 3        // Patch version component of the current release
+	Minor = 16       // Minor version component of the current release
+	Patch = 9        // Patch version component of the current release
 	Meta  = "stable" // Version metadata to append to the version string
 )
 
@@ -42,7 +42,7 @@ var gitTag string
 
 // Override the version variables if the gitTag was set at build time.
 var _ = func() (_ string) {
-	semver := regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+)?$`)
+	semver := regexp.MustCompile(`^(?:celo-)?v([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+)?$`)
 	version := semver.FindStringSubmatch(gitTag)
 	if version == nil {
 		return

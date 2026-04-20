@@ -79,10 +79,6 @@ type Genesis struct {
 	// Chains with history pruning, or extraordinarily large genesis allocation (e.g. after a regenesis event)
 	// may utilize this to get started, and then state-sync the latest state, while still verifying the header chain.
 	StateHash *common.Hash `json:"stateHash,omitempty"`
-
-	// initingGenesis is used to indicate whether this genesis config is being
-	// used in the initGenesis operation.
-	initingGenesis bool
 }
 
 // copy copies the genesis.
@@ -172,7 +168,7 @@ func hashAlloc(ga *types.GenesisAlloc, isVerkle, isIsthmus bool) (common.Hash, c
 		if account.Balance != nil {
 			statedb.AddBalance(addr, uint256.MustFromBig(account.Balance), tracing.BalanceIncreaseGenesisBalance)
 		}
-		statedb.SetCode(addr, account.Code)
+		statedb.SetCode(addr, account.Code, tracing.CodeChangeGenesis)
 		statedb.SetNonce(addr, account.Nonce, tracing.NonceChangeGenesis)
 		for key, value := range account.Storage {
 			statedb.SetState(addr, key, value)
@@ -210,7 +206,7 @@ func flushAlloc(ga *types.GenesisAlloc, triedb *triedb.Database, isIsthmus bool)
 			// already captures the allocations.
 			statedb.AddBalance(addr, uint256.MustFromBig(account.Balance), tracing.BalanceIncreaseGenesisBalance)
 		}
-		statedb.SetCode(addr, account.Code)
+		statedb.SetCode(addr, account.Code, tracing.CodeChangeGenesis)
 		statedb.SetNonce(addr, account.Nonce, tracing.NonceChangeGenesis)
 		for key, value := range account.Storage {
 			statedb.SetState(addr, key, value)
@@ -257,6 +253,8 @@ func getGenesisState(db ethdb.Database, blockhash common.Hash) (alloc types.Gene
 		genesis = DefaultSepoliaGenesisBlock()
 	case params.HoleskyGenesisHash:
 		genesis = DefaultHoleskyGenesisBlock()
+	case params.HoodiGenesisHash:
+		genesis = DefaultHoodiGenesisBlock()
 	}
 	if genesis != nil {
 		return genesis.Alloc, nil
@@ -292,7 +290,9 @@ func (e *GenesisMismatchError) Error() string {
 
 // ChainOverrides contains the changes to chain config.
 type ChainOverrides struct {
-	OverrideCancun *uint64
+	OverrideOsaka  *uint64
+	OverrideBPO1   *uint64
+	OverrideBPO2   *uint64
 	OverrideVerkle *uint64
 
 	// OP-Stack additions
@@ -305,8 +305,6 @@ type ChainOverrides struct {
 	OverrideOptimismJovian   *uint64
 	OverrideOptimismInterop  *uint64
 	ApplySuperchainUpgrades  bool
-	// celo
-	OverrideOptimismCel2 *uint64
 }
 
 // apply applies the chain overrides on the supplied chain config.
@@ -341,8 +339,14 @@ func (o *ChainOverrides) apply(cfg *params.ChainConfig) error {
 		}
 	}
 
-	if o.OverrideCancun != nil {
-		cfg.CancunTime = o.OverrideCancun
+	if o.OverrideOsaka != nil {
+		cfg.OsakaTime = o.OverrideOsaka
+	}
+	if o.OverrideBPO1 != nil {
+		cfg.BPO1Time = o.OverrideBPO1
+	}
+	if o.OverrideBPO2 != nil {
+		cfg.BPO2Time = o.OverrideBPO2
 	}
 	if o.OverrideVerkle != nil {
 		cfg.VerkleTime = o.OverrideVerkle
@@ -380,8 +384,12 @@ func (o *ChainOverrides) apply(cfg *params.ChainConfig) error {
 	if o.OverrideOptimismInterop != nil {
 		cfg.InteropTime = o.OverrideOptimismInterop
 	}
-	if o.OverrideOptimismCel2 != nil {
-		cfg.Cel2Time = o.OverrideOptimismCel2
+
+	// We check for validity after applying the overrides, even if there weren't any.
+	// This has the added benefit that the check always happens when
+	// applying overrides, which is at the right places during genesis setup.
+	if verr := cfg.CheckOptimismValidity(); verr != nil {
+		return fmt.Errorf("OP-Stack invalidity after applying overrides: %w", verr)
 	}
 
 	return cfg.CheckConfigForkOrder()
@@ -486,9 +494,7 @@ func SetupGenesisBlockWithOverride(db ethdb.Database, triedb *triedb.Database, g
 	// OP-Stack warning: tricky upstream code: method with nil-receiver case.
 	// Returns genesis.Config if genesis is not nil. Falls back to storedCfg otherwise. And some special L1 cases.
 	newCfg := genesis.chainConfigOrDefault(ghash, storedCfg)
-
-	// Sanity-check the new configuration.
-	if err := newCfg.CheckConfigForkOrder(); err != nil {
+	if err := overrides.apply(newCfg); err != nil {
 		return nil, common.Hash{}, nil, err
 	}
 
@@ -532,7 +538,7 @@ func SetupGenesisBlockWithOverride(db ethdb.Database, triedb *triedb.Database, g
 
 // LoadChainConfig loads the stored chain config if it is already present in
 // database, otherwise, return the config in the provided genesis specification.
-func LoadChainConfig(db ethdb.Database, genesis *Genesis) (*params.ChainConfig, error) {
+func LoadChainConfig(db ethdb.Database, genesis *Genesis) (cfg *params.ChainConfig, ghash common.Hash, err error) {
 	// Load the stored chain config from the database. It can be nil
 	// in case the database is empty. Notably, we only care about the
 	// chain config corresponds to the canonical chain.
@@ -540,27 +546,28 @@ func LoadChainConfig(db ethdb.Database, genesis *Genesis) (*params.ChainConfig, 
 	if stored != (common.Hash{}) {
 		storedcfg := rawdb.ReadChainConfig(db, stored)
 		if storedcfg != nil {
-			return storedcfg, nil
+			return storedcfg, stored, nil
 		}
 	}
 	// Load the config from the provided genesis specification
 	if genesis != nil {
 		// Reject invalid genesis spec without valid chain config
 		if genesis.Config == nil {
-			return nil, errGenesisNoConfig
+			return nil, common.Hash{}, errGenesisNoConfig
 		}
 		// If the canonical genesis header is present, but the chain
 		// config is missing(initialize the empty leveldb with an
 		// external ancient chain segment), ensure the provided genesis
 		// is matched.
-		if stored != (common.Hash{}) && genesis.ToBlock().Hash() != stored {
-			return nil, &GenesisMismatchError{stored, genesis.ToBlock().Hash()}
+		ghash := genesis.ToBlock().Hash()
+		if stored != (common.Hash{}) && ghash != stored {
+			return nil, ghash, &GenesisMismatchError{stored, ghash}
 		}
-		return genesis.Config, nil
+		return genesis.Config, ghash, nil
 	}
 	// There is no stored chain config and no new config provided,
 	// In this case the default chain config(mainnet) will be used
-	return params.MainnetChainConfig, nil
+	return params.MainnetChainConfig, params.MainnetGenesisHash, nil
 }
 
 // chainConfigOrDefault retrieves the attached chain configuration. If the genesis
@@ -576,6 +583,8 @@ func (g *Genesis) chainConfigOrDefault(ghash common.Hash, stored *params.ChainCo
 		return params.HoleskyChainConfig
 	case ghash == params.SepoliaGenesisHash:
 		return params.SepoliaChainConfig
+	case ghash == params.HoodiGenesisHash:
+		return params.HoodiChainConfig
 	default:
 		return stored
 	}
@@ -614,11 +623,8 @@ func (g *Genesis) toBlockWithRoot(stateRoot, storageRootMessagePasser common.Has
 	head := &types.Header{}
 	// If we are in a context where ginerbread is configured but not active for
 	// the genesis block we set the block to be pre-gingerbread. This affects
-	// the way it is encoded, which affects its hash. Ideally we could do
-	// without the InitGenesis condition, but TestFeeHistory, makes use of
-	// chains with pre-gingerbread genesis blocks without actually accounting
-	// for the different structure of the pre-gingerbread block.
-	if g.InitingGenesis() && g.Config.GingerbreadBlock != nil && !g.Config.IsGingerbread(number) {
+	// the way it is encoded, which affects its hash.
+	if g.Config.GingerbreadBlock != nil && !g.Config.IsGingerbread(number) {
 		head = types.NewPreGingerbreadHeader()
 	}
 
@@ -680,6 +686,11 @@ func (g *Genesis) toBlockWithRoot(stateRoot, storageRootMessagePasser common.Has
 			if head.BlobGasUsed == nil {
 				head.BlobGasUsed = new(uint64)
 			}
+		} else {
+			if g.ExcessBlobGas != nil {
+				log.Warn("Invalid genesis, unexpected ExcessBlobGas set before Cancun, allowing it for testing purposes")
+				head.ExcessBlobGas = g.ExcessBlobGas
+			}
 		}
 		if conf.IsPrague(num, g.Timestamp) {
 			head.RequestsHash = &types.EmptyRequestsHash
@@ -687,8 +698,9 @@ func (g *Genesis) toBlockWithRoot(stateRoot, storageRootMessagePasser common.Has
 		// If Isthmus is active at genesis, set the WithdrawalRoot to the storage root of the L2ToL1MessagePasser contract.
 		if g.Config.IsOptimismIsthmus(g.Timestamp) {
 			if storageRootMessagePasser == (common.Hash{}) {
-				// if there was no MessagePasser contract storage, set the WithdrawalsHash to the empty hash
-				storageRootMessagePasser = types.EmptyWithdrawalsHash
+				// if there was no MessagePasser contract storage, something is wrong
+				// (it should at least store an implementation address and owner address)
+				log.Warn("isthmus: no storage root for L2ToL1MessagePasser contract")
 			}
 			head.WithdrawalsHash = &storageRootMessagePasser
 		}
@@ -816,6 +828,18 @@ func DefaultHoleskyGenesisBlock() *Genesis {
 	}
 }
 
+// DefaultHoodiGenesisBlock returns the Hoodi network genesis block.
+func DefaultHoodiGenesisBlock() *Genesis {
+	return &Genesis{
+		Config:     params.HoodiChainConfig,
+		Nonce:      0x1234,
+		GasLimit:   0x2255100,
+		Difficulty: big.NewInt(0x01),
+		Timestamp:  1742212800,
+		Alloc:      decodePrealloc(hoodiAllocData),
+	}
+}
+
 // DeveloperGenesisBlock returns the 'geth --dev' genesis block.
 func DeveloperGenesisBlock(gasLimit uint64, faucet *common.Address) *Genesis {
 	// Override the default period to the user requested one
@@ -828,15 +852,23 @@ func DeveloperGenesisBlock(gasLimit uint64, faucet *common.Address) *Genesis {
 		BaseFee:    big.NewInt(params.InitialBaseFee),
 		Difficulty: big.NewInt(0),
 		Alloc: map[common.Address]types.Account{
-			common.BytesToAddress([]byte{1}): {Balance: big.NewInt(1)}, // ECRecover
-			common.BytesToAddress([]byte{2}): {Balance: big.NewInt(1)}, // SHA256
-			common.BytesToAddress([]byte{3}): {Balance: big.NewInt(1)}, // RIPEMD
-			common.BytesToAddress([]byte{4}): {Balance: big.NewInt(1)}, // Identity
-			common.BytesToAddress([]byte{5}): {Balance: big.NewInt(1)}, // ModExp
-			common.BytesToAddress([]byte{6}): {Balance: big.NewInt(1)}, // ECAdd
-			common.BytesToAddress([]byte{7}): {Balance: big.NewInt(1)}, // ECScalarMul
-			common.BytesToAddress([]byte{8}): {Balance: big.NewInt(1)}, // ECPairing
-			common.BytesToAddress([]byte{9}): {Balance: big.NewInt(1)}, // BLAKE2b
+			common.BytesToAddress([]byte{0x01}): {Balance: big.NewInt(1)}, // ECRecover
+			common.BytesToAddress([]byte{0x02}): {Balance: big.NewInt(1)}, // SHA256
+			common.BytesToAddress([]byte{0x03}): {Balance: big.NewInt(1)}, // RIPEMD
+			common.BytesToAddress([]byte{0x04}): {Balance: big.NewInt(1)}, // Identity
+			common.BytesToAddress([]byte{0x05}): {Balance: big.NewInt(1)}, // ModExp
+			common.BytesToAddress([]byte{0x06}): {Balance: big.NewInt(1)}, // ECAdd
+			common.BytesToAddress([]byte{0x07}): {Balance: big.NewInt(1)}, // ECScalarMul
+			common.BytesToAddress([]byte{0x08}): {Balance: big.NewInt(1)}, // ECPairing
+			common.BytesToAddress([]byte{0x09}): {Balance: big.NewInt(1)}, // BLAKE2b
+			common.BytesToAddress([]byte{0x0a}): {Balance: big.NewInt(1)}, // KZGPointEval
+			common.BytesToAddress([]byte{0x0b}): {Balance: big.NewInt(1)}, // BLSG1Add
+			common.BytesToAddress([]byte{0x0c}): {Balance: big.NewInt(1)}, // BLSG1MultiExp
+			common.BytesToAddress([]byte{0x0d}): {Balance: big.NewInt(1)}, // BLSG2Add
+			common.BytesToAddress([]byte{0x0e}): {Balance: big.NewInt(1)}, // BLSG2MultiExp
+			common.BytesToAddress([]byte{0x0f}): {Balance: big.NewInt(1)}, // BLSG1Pairing
+			common.BytesToAddress([]byte{0x10}): {Balance: big.NewInt(1)}, // BLSG1MapG1
+			common.BytesToAddress([]byte{0x11}): {Balance: big.NewInt(1)}, // BLSG2MapG2
 			// Pre-deploy system contracts
 			params.BeaconRootsAddress:        {Nonce: 1, Code: params.BeaconRootsCode, Balance: common.Big0},
 			params.HistoryStorageAddress:     {Nonce: 1, Code: params.HistoryStorageCode, Balance: common.Big0},

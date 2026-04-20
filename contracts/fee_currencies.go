@@ -100,6 +100,8 @@ func DebitFees(evm *vm.EVM, feeCurrency *common.Address, address common.Address,
 				err,
 			)
 		}
+		// This error could still be caused by lack of gas, since those are not always propagated from sub-calls.
+		// See https://github.com/celo-org/op-geth/issues/346#issuecomment-3027651249
 		return 0, fmt.Errorf(
 			"%w: DebitFees() call error: %w",
 			ErrFeeCurrencyEVMCall,
@@ -115,7 +117,7 @@ func DebitFees(evm *vm.EVM, feeCurrency *common.Address, address common.Address,
 // Credits fees to the respective parties
 // - the base fee goes to the fee handler
 // - the transaction tip goes to the miner
-// - the l1 data fee goes the the data fee receiver, is the node runs in rollup mode
+// - the l1 data fee goes to the data fee receiver, if the node runs in rollup mode
 // - remaining funds are refunded to the transaction sender
 func CreditFees(
 	evm *vm.EVM,
@@ -133,7 +135,7 @@ func CreditFees(
 	// Our old `creditGasFees` function does not accept an l1DataFee and
 	// the fee currencies do not implement the new interface yet. Since tip
 	// and data fee both go to the sequencer, we can work around that for
-	// now by addint the l1DataFee to the tip.
+	// now by adding the l1DataFee to the tip.
 	if l1DataFee != nil {
 		feeTip = new(big.Int).Add(feeTip, l1DataFee)
 	}
@@ -173,6 +175,8 @@ func CreditFees(
 				err,
 			)
 		}
+		// This error could still be caused by lack of gas, since those are not always propagated from sub-calls.
+		// See https://github.com/celo-org/op-geth/issues/346#issuecomment-3027651249
 		return fmt.Errorf(
 			"%w: CreditFees() call error: %w",
 			ErrFeeCurrencyEVMCall,

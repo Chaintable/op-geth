@@ -387,7 +387,7 @@ func TestNewRPCTransactionDynamicFee(t *testing.T) {
 func allEnabledChainConfig() *params.ChainConfig {
 	zeroTime := uint64(0)
 	return &params.ChainConfig{
-		ChainID:             big.NewInt(params.CeloAlfajoresChainID),
+		ChainID:             big.NewInt(params.CeloMainnetChainID),
 		HomesteadBlock:      big.NewInt(0),
 		EIP150Block:         big.NewInt(0),
 		EIP155Block:         big.NewInt(0),
@@ -641,9 +641,9 @@ func TestCheckTxFee(t *testing.T) {
 	})
 }
 
-// TestMarshalReceipt tests the marshalReceipt function, which serializes a receipt object into a JSON-RPC response.
+// TestMarshalReceipt tests the MarshalReceipt function, which serializes a receipt object into a JSON-RPC response.
 // It focuses on ensuring that this function returns the proper schema based on the transaction type.
-func Test_marshalReceipt(t *testing.T) {
+func Test_MarshalReceipt(t *testing.T) {
 	config := allEnabledChainConfig()
 	cel2Time := uint64(1000)
 	config.Cel2Time = &cel2Time
@@ -728,7 +728,7 @@ func Test_marshalReceipt(t *testing.T) {
 		receipt := receipt
 		receipt.TxHash = tx.Hash()
 
-		result := marshalReceipt(&receipt, blockHash, blockNumber, cel2Time-1, signer, tx, int(txIndex), &cel1Config)
+		result := MarshalReceipt(&receipt, blockHash, blockNumber, cel2Time-1, signer, tx, int(txIndex), &cel1Config)
 
 		checkReceiptFields(t, result, &receipt, tx, signer, blockHash, blockNumber, cel2Time-1, txIndex, &cel1Config)
 	})
@@ -748,7 +748,7 @@ func Test_marshalReceipt(t *testing.T) {
 		receipt := receipt
 		receipt.TxHash = tx.Hash()
 
-		result := marshalReceipt(&receipt, blockHash, blockNumber, cel2Time, signer, tx, int(txIndex), config)
+		result := MarshalReceipt(&receipt, blockHash, blockNumber, cel2Time, signer, tx, int(txIndex), config)
 
 		checkReceiptFields(t, result, &receipt, tx, signer, blockHash, blockNumber, cel2Time, txIndex, config)
 	})
@@ -768,14 +768,14 @@ func Test_marshalReceipt(t *testing.T) {
 		receipt := receipt
 		receipt.TxHash = tx.Hash()
 
-		result := marshalReceipt(&receipt, blockHash, blockNumber, cel2Time, signer, tx, int(txIndex), config)
+		result := MarshalReceipt(&receipt, blockHash, blockNumber, cel2Time, signer, tx, int(txIndex), config)
 
 		checkReceiptFields(t, result, &receipt, tx, signer, blockHash, blockNumber, cel2Time, txIndex, config)
 	})
 
 	t.Run("CeloDynamicFeeTxV1 receipt", func(t *testing.T) {
 		tx, err := types.SignTx(types.NewTx(&types.CeloDynamicFeeTx{
-			ChainID:             big.NewInt(params.CeloAlfajoresChainID),
+			ChainID:             big.NewInt(params.CeloMainnetChainID),
 			Nonce:               nonce,
 			GasTipCap:           gasTipCap,
 			GasFeeCap:           gasFeeCap,
@@ -792,14 +792,14 @@ func Test_marshalReceipt(t *testing.T) {
 		receipt := receipt
 		receipt.TxHash = tx.Hash()
 
-		result := marshalReceipt(&receipt, blockHash, blockNumber, cel2Time, signer, tx, int(txIndex), config)
+		result := MarshalReceipt(&receipt, blockHash, blockNumber, cel2Time, signer, tx, int(txIndex), config)
 
 		checkReceiptFields(t, result, &receipt, tx, signer, blockHash, blockNumber, cel2Time, txIndex, config)
 	})
 
 	t.Run("CeloDynamicFeeTxV2 receipt (Post Cel2)", func(t *testing.T) {
 		tx, err := types.SignTx(types.NewTx(&types.CeloDynamicFeeTxV2{
-			ChainID:     big.NewInt(params.CeloAlfajoresChainID),
+			ChainID:     big.NewInt(params.CeloMainnetChainID),
 			Nonce:       nonce,
 			GasTipCap:   gasTipCap,
 			GasFeeCap:   gasFeeCap,
@@ -814,14 +814,14 @@ func Test_marshalReceipt(t *testing.T) {
 		receipt := receipt
 		receipt.TxHash = tx.Hash()
 
-		result := marshalReceipt(&receipt, blockHash, blockNumber, cel2Time, signer, tx, int(txIndex), config)
+		result := MarshalReceipt(&receipt, blockHash, blockNumber, cel2Time, signer, tx, int(txIndex), config)
 
 		checkReceiptFields(t, result, &receipt, tx, signer, blockHash, blockNumber, cel2Time, txIndex, config)
 	})
 
 	t.Run("CeloDynamicFeeTxV2 receipt (Pre Cel2)", func(t *testing.T) {
 		tx, err := types.SignTx(types.NewTx(&types.CeloDynamicFeeTxV2{
-			ChainID:     big.NewInt(params.CeloAlfajoresChainID),
+			ChainID:     big.NewInt(params.CeloMainnetChainID),
 			Nonce:       nonce,
 			GasTipCap:   gasTipCap,
 			GasFeeCap:   gasFeeCap,
@@ -836,7 +836,7 @@ func Test_marshalReceipt(t *testing.T) {
 		receipt := receipt
 		receipt.TxHash = tx.Hash()
 
-		result := marshalReceipt(&receipt, blockHash, blockNumber, cel2Time-1, signer, tx, int(txIndex), &cel1Config)
+		result := MarshalReceipt(&receipt, blockHash, blockNumber, cel2Time-1, signer, tx, int(txIndex), &cel1Config)
 
 		checkReceiptFields(t, result, &receipt, tx, signer, blockHash, blockNumber, cel2Time-1, txIndex, &cel1Config)
 	})
@@ -935,7 +935,7 @@ func TestCeloTransaction_RoundTripRpcJSON(t *testing.T) {
 			if data, err := json.Marshal(tx); err != nil {
 				t.Fatalf("test %d: marshalling failed; %v", i, err)
 			} else if err = tx2.UnmarshalJSON(data); err != nil {
-				t.Fatalf("test %d: unmarshal failed: %v", i, err)
+				t.Fatalf("test %d: sunmarshal failed: %v", i, err)
 			} else if want, have := tx.Hash(), tx2.Hash(); want != have {
 				t.Fatalf("test %d: stx changed, want %x have %x", i, want, have)
 			}

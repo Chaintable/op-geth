@@ -2,6 +2,7 @@ package log
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/holiman/uint256"
+	"github.com/stretchr/testify/require"
 )
 
 // TestLoggingWithVmodule checks that vmodule works.
@@ -49,6 +51,64 @@ func TestTerminalHandlerWithAttrs(t *testing.T) {
 	}
 }
 
+// TestLogMixedPairs tests that slog.Attr is a valid thing to add as log context into a call.
+func TestLogMixedPairs(t *testing.T) {
+	out := new(bytes.Buffer)
+	glog := NewGlogHandler(NewTerminalHandlerWithLevel(out, LevelTrace, false))
+	glog.Verbosity(LevelTrace)
+	logger := NewLogger(glog)
+	logger.Trace("a message", "foo", "bar", slog.String("x", "y"), "something", 123)
+	have := out.String()
+	// The timestamp is locale-dependent, so we want to trim that off
+	// "INFO [01-01|00:00:00.000] a message ..." -> "a message..."
+	have = strings.Split(have, "]")[1]
+	want := " a message                                foo=bar x=y something=123\n"
+	if have != want {
+		t.Errorf("\nhave: %q\nwant: %q\n", have, want)
+	}
+}
+
+type tracingHandler struct {
+	slog.Handler // wrap around a real handler, to inherit common handler functionality
+	onRecord     func(ctx context.Context, record slog.Record)
+}
+
+func (h *tracingHandler) Handle(ctx context.Context, record slog.Record) error {
+	h.onRecord(ctx, record)
+	return h.Handler.Handle(ctx, record)
+}
+
+type testCtxKeyType struct{}
+
+var testCtxKey = testCtxKeyType{}
+
+// TestContextLogging tests that a context can be passed via a logging call to the underlying log handler
+func TestContextLogging(t *testing.T) {
+	out := new(bytes.Buffer)
+	glog := NewGlogHandler(NewTerminalHandlerWithLevel(out, LevelInfo, false))
+	glog.Verbosity(LevelInfo)
+	var traced int
+	h := &tracingHandler{Handler: glog, onRecord: func(ctx context.Context, record slog.Record) {
+		if v := ctx.Value(testCtxKey); v == nil {
+			t.Fatal("expected test context value to be present")
+		} else {
+			traced = v.(int)
+		}
+	}}
+	logger := NewLogger(h)
+	ctx := context.WithValue(context.Background(), testCtxKey, 123)
+	logger.InfoContext(ctx, "a message", "foo", "bar")
+	require.Equal(t, 123, traced, "should have traced the context value")
+	have := out.String()
+	// The timestamp is locale-dependent, so we want to trim that off
+	// "INFO [01-01|00:00:00.000] a message ..." -> "a message..."
+	have = strings.Split(have, "]")[1]
+	want := " a message                                foo=bar\n"
+	if have != want {
+		t.Errorf("\nhave: %q\nwant: %q\n", have, want)
+	}
+}
+
 // Make sure the default json handler outputs debug log lines
 func TestJSONHandler(t *testing.T) {
 	out := new(bytes.Buffer)
@@ -70,9 +130,10 @@ func TestJSONHandler(t *testing.T) {
 
 func BenchmarkTraceLogging(b *testing.B) {
 	SetDefault(NewLogger(NewTerminalHandler(io.Discard, true)))
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	i := 0
+	for b.Loop() {
 		Trace("a message", "v", i)
+		i++
 	}
 }
 
@@ -99,8 +160,8 @@ func benchmarkLogger(b *testing.B, l Logger) {
 		err    = errors.New("oh nooes it's crap")
 	)
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	i := 0
+	for b.Loop() {
 		l.Info("This is a message",
 			"foo", int16(i),
 			"bytes", bb,
@@ -109,8 +170,8 @@ func benchmarkLogger(b *testing.B, l Logger) {
 			"bigint", bigint,
 			"nilbig", nilbig,
 			"err", err)
+		i++
 	}
-	b.StopTimer()
 }
 
 func TestLoggerOutput(t *testing.T) {
@@ -161,18 +222,18 @@ const termTimeFormat = "01-02|15:04:05.000"
 func BenchmarkAppendFormat(b *testing.B) {
 	var now = time.Now()
 	b.Run("fmt time.Format", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			fmt.Fprintf(io.Discard, "%s", now.Format(termTimeFormat))
 		}
 	})
 	b.Run("time.AppendFormat", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			now.AppendFormat(nil, termTimeFormat)
 		}
 	})
 	var buf = new(bytes.Buffer)
 	b.Run("time.Custom", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			writeTimeTermFormat(buf, now)
 			buf.Reset()
 		}

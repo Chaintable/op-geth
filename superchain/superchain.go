@@ -9,12 +9,13 @@ import (
 )
 
 type Superchain struct {
-	Name                        string         `toml:"name"`
-	ProtocolVersionsAddr        common.Address `toml:"protocol_versions_addr"`
-	SuperchainConfigAddr        common.Address `toml:"superchain_config_addr"`
-	OpContractsManagerProxyAddr common.Address `toml:"op_contracts_manager_proxy_addr"`
-	Hardforks                   HardforkConfig
-	L1                          L1Config
+	Name                   string         `toml:"name"`
+	ProtocolVersionsAddr   common.Address `toml:"protocol_versions_addr"`
+	SuperchainConfigAddr   common.Address `toml:"superchain_config_addr"`
+	OpContractsManagerAddr common.Address `toml:"op_contracts_manager_addr"`
+	SaferSafesAddr         common.Address `toml:"safer_safes_addr"`
+	Hardforks              HardforkConfig
+	L1                     L1Config
 }
 
 type L1Config struct {

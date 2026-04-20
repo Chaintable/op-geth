@@ -321,7 +321,7 @@ type rollupCostFuncProvider interface {
 }
 
 // newRollupList creates a new transaction list with a rollup cost function pointer
-// that must point back to the pool's rollup cost function this list belongs to.
+// that must point back to the queue's rollup cost function this list belongs to.
 func newRollupList(strict bool, rollupCostFnPrv rollupCostFuncProvider) *list {
 	l := newList(strict)
 	l.rollupCostFnPrv = rollupCostFnPrv
@@ -378,8 +378,6 @@ func (l *list) Add(tx *types.Transaction, priceBump uint64, rates common.Exchang
 		if tx.GasFeeCapIntCmp(thresholdFeeCapInCurrency) < 0 || tx.GasTipCapIntCmp(thresholdTipInCurrency) < 0 {
 			return false, nil
 		}
-		// Old is being replaced, subtract old cost
-		l.subTotalCost([]*types.Transaction{old})
 	}
 	// Add new tx cost to totalcost
 	feeCurrencyTc := l.totalCostVar(tx.FeeCurrency())
@@ -394,8 +392,23 @@ func (l *list) Add(tx *types.Transaction, priceBump uint64, rates common.Exchang
 	}
 
 	l.txCosts[tx.Hash()] = cost // OP-Stack addition
-	feeCurrencyTc.Add(feeCurrencyTc, feeCurrencyCost)
-	nativeTc.Add(nativeTc, cost)
+	total, overflow := new(uint256.Int).AddOverflow(feeCurrencyTc, feeCurrencyCost)
+	if overflow {
+		return false, nil
+	}
+	feeCurrencyTc.Set(total)
+
+	total, overflow = new(uint256.Int).AddOverflow(nativeTc, cost)
+	if overflow {
+		return false, nil
+	}
+	nativeTc.Set(total)
+
+	// Old is being replaced, subtract old cost
+	if old != nil {
+		l.subTotalCost([]*types.Transaction{old})
+	}
+
 	// Otherwise overwrite the old transaction with the current one
 	l.txs.Put(tx)
 	l.updateCostCapFor(tx.FeeCurrency(), feeCurrencyCost)
@@ -738,7 +751,7 @@ func (l *pricedList) Reheap() {
 
 // SetBaseFeeAndRates updates the base fee and triggers a re-heap. Note that Removed is not
 // necessary to call right before SetBaseFee when processing a new block.
-func (l *pricedList) SetBaseFeeAndRates(baseFee *big.Int, rates common.ExchangeRates) {
+func (l *pricedList) SetBaseFeeAndRates(baseFee *uint256.Int, rates common.ExchangeRates) {
 	l.urgent.ratesAndFees = exchange.NewRatesAndFees(rates, baseFee)
 	l.floating.ratesAndFees = exchange.NewRatesAndFees(rates, nil)
 	l.Reheap()

@@ -22,7 +22,9 @@ type ChainConfig struct {
 	MaxSequencerDrift uint64          `toml:"max_sequencer_drift"`
 	GasPayingToken    *common.Address `toml:"gas_paying_token"`
 	Hardforks         HardforkConfig  `toml:"hardforks"`
+	Interop           *Interop        `toml:"interop,omitempty"`
 	Optimism          *OptimismConfig `toml:"optimism,omitempty"`
+	Celo              *CeloConfig     `toml:"celo,omitempty"`
 
 	AltDA *AltDAConfig `toml:"alt_da,omitempty"`
 
@@ -31,6 +33,12 @@ type ChainConfig struct {
 	Roles RolesConfig `toml:"roles"`
 
 	Addresses AddressesConfig `toml:"addresses"`
+}
+
+type Dependency struct{}
+
+type Interop struct {
+	Dependencies map[string]Dependency `json:"dependencies" toml:"dependencies"`
 }
 
 type HardforkConfig struct {
@@ -42,15 +50,21 @@ type HardforkConfig struct {
 	HoloceneTime *uint64 `toml:"holocene_time"`
 	IsthmusTime  *uint64 `toml:"isthmus_time"`
 	JovianTime   *uint64 `toml:"jovian_time"`
-
+	InteropTime  *uint64 `toml:"interop_time"`
 	// Optional Forks
 	PectraBlobScheduleTime *uint64 `toml:"pectra_blob_schedule_time,omitempty"`
+	// Celo-specific forks
+	Cel2Time *uint64 `toml:"cel2_time,omitempty"`
 }
 
 type OptimismConfig struct {
 	EIP1559Elasticity        uint64  `toml:"eip1559_elasticity"`
 	EIP1559Denominator       uint64  `toml:"eip1559_denominator"`
 	EIP1559DenominatorCanyon *uint64 `toml:"eip1559_denominator_canyon"`
+}
+
+type CeloConfig struct {
+	EIP1559BaseFeeFloor uint64 `toml:"eip1559_base_fee_floor"`
 }
 
 type AltDAConfig struct {

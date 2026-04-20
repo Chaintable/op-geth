@@ -56,9 +56,11 @@ func LoadOPStackChainConfig(chConfig *superchain.ChainConfig) (*ChainConfig, err
 		HoloceneTime:            hardforks.HoloceneTime,
 		IsthmusTime:             hardforks.IsthmusTime,
 		JovianTime:              hardforks.JovianTime,
+		InteropTime:             hardforks.InteropTime,
 		TerminalTotalDifficulty: common.Big0,
 		Ethash:                  nil,
 		Clique:                  nil,
+		GingerbreadBlock:        common.Big0,
 	}
 
 	if chConfig.Optimism != nil {
@@ -71,6 +73,16 @@ func LoadOPStackChainConfig(chConfig *superchain.ChainConfig) (*ChainConfig, err
 		}
 	}
 
+	// Celo-specific config
+	if chConfig.Celo != nil {
+		out.Celo = &CeloConfig{
+			EIP1559BaseFeeFloor: chConfig.Celo.EIP1559BaseFeeFloor,
+		}
+	}
+	if hardforks.Cel2Time != nil {
+		out.Cel2Time = uint64ptr(*hardforks.Cel2Time)
+	}
+
 	// special overrides for OP-Stack chains with pre-Regolith upgrade history
 	switch chConfig.ChainID {
 	case OPMainnetChainID:
@@ -80,6 +92,14 @@ func LoadOPStackChainConfig(chConfig *superchain.ChainConfig) (*ChainConfig, err
 		out.GrayGlacierBlock = big.NewInt(105235063)
 		out.MergeNetsplitBlock = big.NewInt(105235063)
 		out.BedrockBlock = big.NewInt(105235063)
+	case CeloMainnetChainID:
+		out.GingerbreadBlock = big.NewInt(21616000)
+		out.BerlinBlock = big.NewInt(31056500)
+		out.LondonBlock = big.NewInt(31056500)
+		out.ArrowGlacierBlock = big.NewInt(31056500)
+		out.GrayGlacierBlock = big.NewInt(31056500)
+		out.MergeNetsplitBlock = big.NewInt(31056500)
+		out.BedrockBlock = big.NewInt(31056500)
 	}
 
 	return out, nil

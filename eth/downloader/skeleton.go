@@ -221,6 +221,8 @@ type skeleton struct {
 	terminate  chan chan error  // Termination channel to abort sync
 	terminated chan struct{}    // Channel to signal that the syncer is dead
 
+	deferredHead *types.Header // Latest forced head received during sync restart
+
 	// Callback hooks used during testing
 	syncStarting func() // callback triggered after a sync cycle is inited but before started
 }
@@ -275,7 +277,7 @@ func (s *skeleton) startup() {
 			for {
 				// If the sync cycle terminated or was terminated, propagate up when
 				// higher layers request termination. There's no fancy explicit error
-				// signalling as the sync loop should never terminate (TM).
+				// signaling as the sync loop should never terminate (TM).
 				newhead, err := s.sync(head)
 				switch {
 				case err == errSyncLinked:
@@ -295,6 +297,10 @@ func (s *skeleton) startup() {
 					// way that requires resyncing it. Restart sync with the new
 					// head to force a cleanup.
 					head = newhead
+					if s.deferredHead != nil {
+						head = s.deferredHead
+						s.deferredHead = nil
+					}
 
 				case err == errTerminated:
 					// Sync was requested to be terminated from within, stop and
@@ -384,7 +390,7 @@ func (s *skeleton) sync(head *types.Header) (*types.Header, error) {
 			defer close(done)
 			filled := s.filler.suspend()
 			if filled == nil {
-				log.Error("Latest filled block is not available")
+				log.Warn("Latest filled block is not available")
 				return
 			}
 			// If something was filled, try to delete stale sync helpers. If
@@ -402,6 +408,9 @@ func (s *skeleton) sync(head *types.Header) (*types.Header, error) {
 			case <-done:
 				return
 			case event := <-s.headEvents:
+				if event.force {
+					s.deferredHead = event.header
+				}
 				event.errc <- errors.New("beacon syncer reorging")
 			}
 		}
@@ -1150,6 +1159,9 @@ func (s *skeleton) cleanStales(filled *types.Header) error {
 	if number < s.progress.Subchains[0].Head {
 		// The skeleton chain is partially consumed, set the new tail as filled+1.
 		tail := rawdb.ReadSkeletonHeader(s.db, number+1)
+		if tail == nil {
+			return fmt.Errorf("filled header is missing: %d", number+1)
+		}
 		if tail.ParentHash != filled.Hash() {
 			return fmt.Errorf("filled header is discontinuous with subchain: %d %s, please file an issue", number, filled.Hash())
 		}

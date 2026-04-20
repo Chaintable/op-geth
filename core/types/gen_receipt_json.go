@@ -42,6 +42,7 @@ func (r Receipt) MarshalJSON() ([]byte, error) {
 		L1BlobBaseFeeScalar   *hexutil.Uint64 `json:"l1BlobBaseFeeScalar,omitempty"`
 		OperatorFeeScalar     *hexutil.Uint64 `json:"operatorFeeScalar,omitempty"`
 		OperatorFeeConstant   *hexutil.Uint64 `json:"operatorFeeConstant,omitempty"`
+		DAFootprintGasScalar  *hexutil.Uint64 `json:"daFootprintGasScalar,omitempty"`
 		BaseFee               *hexutil.Big    `json:"baseFee,omitempty"`
 	}
 	var enc Receipt
@@ -71,6 +72,7 @@ func (r Receipt) MarshalJSON() ([]byte, error) {
 	enc.L1BlobBaseFeeScalar = (*hexutil.Uint64)(r.L1BlobBaseFeeScalar)
 	enc.OperatorFeeScalar = (*hexutil.Uint64)(r.OperatorFeeScalar)
 	enc.OperatorFeeConstant = (*hexutil.Uint64)(r.OperatorFeeConstant)
+	enc.DAFootprintGasScalar = (*hexutil.Uint64)(r.DAFootprintGasScalar)
 	enc.BaseFee = (*hexutil.Big)(r.BaseFee)
 	return json.Marshal(&enc)
 }
@@ -104,6 +106,7 @@ func (r *Receipt) UnmarshalJSON(input []byte) error {
 		L1BlobBaseFeeScalar   *hexutil.Uint64 `json:"l1BlobBaseFeeScalar,omitempty"`
 		OperatorFeeScalar     *hexutil.Uint64 `json:"operatorFeeScalar,omitempty"`
 		OperatorFeeConstant   *hexutil.Uint64 `json:"operatorFeeConstant,omitempty"`
+		DAFootprintGasScalar  *hexutil.Uint64 `json:"daFootprintGasScalar,omitempty"`
 		BaseFee               *hexutil.Big    `json:"baseFee,omitempty"`
 	}
 	var dec Receipt
@@ -192,6 +195,9 @@ func (r *Receipt) UnmarshalJSON(input []byte) error {
 	}
 	if dec.OperatorFeeConstant != nil {
 		r.OperatorFeeConstant = (*uint64)(dec.OperatorFeeConstant)
+	}
+	if dec.DAFootprintGasScalar != nil {
+		r.DAFootprintGasScalar = (*uint64)(dec.DAFootprintGasScalar)
 	}
 	if dec.BaseFee != nil {
 		r.BaseFee = (*big.Int)(dec.BaseFee)

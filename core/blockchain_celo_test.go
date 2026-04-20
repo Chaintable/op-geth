@@ -28,7 +28,6 @@ import (
 	"github.com/ethereum/go-ethereum/contracts/addresses"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/stretchr/testify/assert"
@@ -99,7 +98,7 @@ func testNativeTransferWithFeeCurrency(t *testing.T, scheme string, feeCurrencyA
 
 		b.AddTx(tx)
 	})
-	chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), DefaultCacheConfigWithScheme(scheme), gspec, nil, engine, vm.Config{}, nil)
+	chain, err := NewBlockChain(rawdb.NewMemoryDatabase(), gspec, engine, DefaultConfig().WithStateScheme(scheme))
 	if err != nil {
 		t.Fatalf("failed to create tester chain: %v", err)
 	}
@@ -118,10 +117,13 @@ func testNativeTransferWithFeeCurrency(t *testing.T, scheme string, feeCurrencyA
 	}
 
 	state, _ := chain.State()
+	head := chain.CurrentBlock()
 
 	backend := contracts.CeloBackend{
 		ChainConfig: chain.chainConfig,
 		State:       state,
+		BlockNumber: head.Number,
+		Time:        head.Time,
 	}
 	exchangeRates, err := contracts.GetExchangeRates(&backend)
 	if err != nil {

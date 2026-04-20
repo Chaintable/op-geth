@@ -31,7 +31,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/params"
@@ -81,7 +80,7 @@ func createCeloMiner(t *testing.T) *Miner {
 	}
 
 	// Create Ethereum backend
-	bc, err := core.NewBlockChain(chainDB, nil, genesis, nil, engine, vm.Config{}, nil)
+	bc, err := core.NewBlockChain(chainDB, genesis, engine, nil)
 	if err != nil {
 		t.Fatalf("can't create new chain %v", err)
 	}
@@ -92,7 +91,7 @@ func createCeloMiner(t *testing.T) *Miner {
 	txpool, _ := txpool.New(testTxPoolConfig.PriceLimit, blockchain, []txpool.SubPool{pool}, nil)
 
 	// Create Miner
-	backend := NewMockBackend(bc, txpool)
+	backend := NewMockBackend(bc, txpool, false, nil)
 
 	return New(backend, minerConfig, engine)
 }

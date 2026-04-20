@@ -18,21 +18,32 @@ mainnet)
 	export FEE_CURRENCY_DIRECTORY_ADDR=0x15F344b9E6c3Cb6F0376A36A64928b13F62C6276
 	echo "Using mainnet network"
 	;;
-alfajores)
-	export ETH_RPC_URL=wss://alfajores-forno.celo-testnet.org/ws
-	export TOKEN_ADDR=0xF194afDf50B03e69Bd7D057c1Aa9e10c9954E4C9
-	export FEE_HANDLER=0xEAaFf71AB67B5d0eF34ba62Ea06Ac3d3E2dAAA38
-	export FEE_CURRENCY=0x4822e58de6f5e485eF90df51C41CE01721331dC0
+celo-sepolia)
+	export ETH_RPC_URL=wss://forno.celo-sepolia.celo-testnet.org/ws
+	export TOKEN_ADDR=0x471EcE3750Da237f93B8E339c536989b8978a438
+	export FEE_HANDLER=0xcD437749E43A154C07F3553504c68fBfD56B8778
+	export FEE_CURRENCY=0x6B172e333e2978484261D7eCC3DE491E79764BbC
 	export FEE_CURRENCY_DIRECTORY_ADDR=0x9212Fb72ae65367A7c887eC4Ad9bE310BAC611BF
-	echo "Using Alfajores network"
-	;;
-baklava)
-	export ETH_RPC_URL=wss://baklava-forno.celo-testnet.org/ws
-	export TOKEN_ADDR=0xdDc9bE57f553fe75752D61606B94CBD7e0264eF8
-	export FEE_HANDLER=0xeed0A69c51079114C280f7b936C79e24bD94013e
-	export FEE_CURRENCY=0x62492A644A588FD904270BeD06ad52B9abfEA1aE
-	export FEE_CURRENCY_DIRECTORY_ADDR=0xD59E1599F45e42Eb356202B2C714D6C7b734C034
-	echo "Using Baklava network"
+	echo "Using Celo Sepolia network"
+
+	case $CURRENCY in
+        EUR)
+			echo "Set FEE_CURRENCY to cEUR address"
+          	export FEE_CURRENCY=0x6B172e333e2978484261D7eCC3DE491E79764BbC
+          	;;
+        USD)
+			echo "Set FEE_CURRENCY to cUSD address"
+          	export FEE_CURRENCY=0xEF4d55D6dE8e8d73232827Cd1e9b2F2dBb45bC80
+          	;;	
+        REAL)
+		  	echo "Set FEE_CURRENCY to cREAL address"
+          	export FEE_CURRENCY=0x13d68A1Bf4a8cB7d9feF54EF70401871b666269c
+          	;;
+        '')
+			echo "Set FEE_CURRENCY to cEUR address"
+        	export FEE_CURRENCY=0x6B172e333e2978484261D7eCC3DE491E79764BbC
+        	;;
+    esac
 	;;
 '')
 	export ETH_RPC_URL=http://127.0.0.1:8545
@@ -54,8 +65,12 @@ export FIXIDITY_1=1000000000000000000000000
 export ZERO_ADDRESS=0x0000000000000000000000000000000000000000
 
 prepare_node() {
-	(
-		cd js-tests || exit 1
-		[[ -d node_modules ]] || npm install
-	)
+    (
+        cd js-tests || exit 1
+        # re-install when .package-lock.json is missing　or package-lock.json is newer than it
+        if [[ ! -f node_modules/.package-lock.json ]] || 
+           [[ package-lock.json -nt node_modules/.package-lock.json ]]; then
+            npm ci
+        fi
+    )
 }

@@ -122,6 +122,23 @@ func (tx *CeloDynamicFeeTxV2) setSignatureValues(chainID, v, r, s *big.Int) {
 	tx.ChainID, tx.V, tx.R, tx.S = chainID, v, r, s
 }
 
+func (tx *CeloDynamicFeeTxV2) sigHash(chainID *big.Int) common.Hash {
+	return prefixedRlpHash(
+		CeloDynamicFeeTxV2Type,
+		[]any{
+			chainID,
+			tx.Nonce,
+			tx.GasTipCap,
+			tx.GasFeeCap,
+			tx.Gas,
+			tx.To,
+			tx.Value,
+			tx.Data,
+			tx.AccessList,
+			tx.FeeCurrency,
+		})
+}
+
 func (tx *CeloDynamicFeeTxV2) encode(b *bytes.Buffer) error {
 	return rlp.Encode(b, tx)
 }

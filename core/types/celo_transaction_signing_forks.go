@@ -7,13 +7,13 @@ var (
 	// celoSigner. This list is ordered with more recent forks appearing
 	// earlier. It is assumed that if a more recent fork is active then all
 	// previous forks are also active.
-	celoForks = forks{&cel2{}, &celoLegacy{}}
+	celoForks = celoForkList{&cel2{}, &celoLegacy{}}
 )
 
-type forks []fork
+type celoForkList []fork
 
 // activeForks returns the active forks for the given block time and chain config.
-func (f forks) activeForks(blockTime uint64, config *params.ChainConfig) []fork {
+func (f celoForkList) activeForks(blockTime uint64, config *params.ChainConfig) []fork {
 	for i, fork := range f {
 		if fork.active(blockTime, config) {
 			return f[i:]
@@ -23,7 +23,7 @@ func (f forks) activeForks(blockTime uint64, config *params.ChainConfig) []fork 
 }
 
 // findTxFuncs returns the txFuncs for the given tx if there is a fork that supports it.
-func (f forks) findTxFuncs(tx *Transaction) *txFuncs {
+func (f celoForkList) findTxFuncs(tx *Transaction) *txFuncs {
 	for _, fork := range f {
 		if funcs := fork.txFuncs(tx); funcs != nil {
 			return funcs
@@ -85,7 +85,7 @@ func (c *celoLegacy) active(blockTime uint64, config *params.ChainConfig) bool {
 }
 
 func (c *celoLegacy) equal(other fork) bool {
-	_, ok := other.(*cel2)
+	_, ok := other.(*celoLegacy)
 	return ok
 }
 

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
 	"math/big"
@@ -12,10 +13,10 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 )
 
-// Decode 0x prefixed hex string from file (including trailing newline)
+// Decode from file. Strip 0x prefix and whitespace (newline) if present.
 func DecodeHex(hexbytes []byte) ([]byte, error) {
 	// Strip 0x prefix and trailing newline
-	hexbytes = hexbytes[2 : len(hexbytes)-1] // strip 0x prefix
+	hexbytes = bytes.TrimPrefix(bytes.TrimSpace(hexbytes), []byte("0x")) // strip 0x prefix
 
 	// Decode hex string
 	bytes := make([]byte, hex.DecodedLen(len(hexbytes)))
@@ -189,6 +190,7 @@ func CeloDeveloperGenesisBlock(gasLimit uint64, faucet *common.Address) *Genesis
 	// Set our own more realistic config
 	config := *params.DevChainConfig
 	genesis.Config = &config
+	genesis.BaseFee = big.NewInt(int64(config.Celo.EIP1559BaseFeeFloor))
 
 	// Add state from celoGenesisAccounts
 	for addr, data := range CeloGenesisAccounts(common.HexToAddress("0x2")) {
@@ -196,14 +198,4 @@ func CeloDeveloperGenesisBlock(gasLimit uint64, faucet *common.Address) *Genesis
 	}
 
 	return genesis
-}
-
-// SetInitingGenesis marks this genesis as one that is being used in the initGenesis operation.
-func (g *Genesis) SetInitingGenesis() {
-	g.initingGenesis = true
-}
-
-// InitingGenesis returns true if this genesis is being used in the initGenesis operation.
-func (g *Genesis) InitingGenesis() bool {
-	return g.initingGenesis
 }

@@ -18,7 +18,7 @@
 package ethconfig
 
 import (
-	"fmt"
+	"errors"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -27,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/clique"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/history"
 	"github.com/ethereum/go-ethereum/core/txpool/blobpool"
 	"github.com/ethereum/go-ethereum/core/txpool/legacypool"
 	"github.com/ethereum/go-ethereum/eth/gasprice"
@@ -49,10 +50,12 @@ var FullNodeGPO = gasprice.Config{
 
 // Defaults contains default settings for use on the Celo networks.
 var Defaults = Config{
+	HistoryMode:        history.KeepAll,
 	SyncMode:           SnapSync,
 	NetworkId:          0,            // enable auto configuration of networkID == chainID
 	TxLookupLimit:      2350000 * 12, // Increase by factor 12 to adapt to Celo 1s block time
-	TransactionHistory: 2350000 * 12, // Increase by factor 12 to adapt to Celo 1s block time
+	TransactionHistory: 2350000 * 12,
+	LogHistory:         2350000, // Increase by factor 12 to adapt to Celo 1s block time
 	StateHistory:       params.FullImmutabilityThreshold,
 	DatabaseCache:      512,
 	TrieCleanCache:     154,
@@ -60,6 +63,7 @@ var Defaults = Config{
 	TrieTimeout:        60 * time.Minute,
 	SnapshotCache:      102,
 	FilterLogCacheSize: 32,
+	LogQueryLimit:      1000,
 	Miner:              miner.DefaultConfig,
 	TxPool:             legacypool.DefaultConfig,
 	BlobPool:           blobpool.DefaultConfig,
@@ -82,6 +86,9 @@ type Config struct {
 	NetworkId uint64
 	SyncMode  SyncMode
 
+	// HistoryMode configures chain history retention.
+	HistoryMode history.HistoryMode
+
 	// This can be set to list of enrtree:// URLs which will be queried for
 	// nodes to connect to.
 	EthDiscoveryURLs  []string
@@ -94,8 +101,11 @@ type Config struct {
 	// Deprecated: use 'TransactionHistory' instead.
 	TxLookupLimit uint64 `toml:",omitempty"` // The maximum number of blocks from head whose tx indices are reserved.
 
-	TransactionHistory uint64 `toml:",omitempty"` // The maximum number of blocks from head whose tx indices are reserved.
-	StateHistory       uint64 `toml:",omitempty"` // The maximum number of blocks from head whose state histories are reserved.
+	TransactionHistory   uint64 `toml:",omitempty"` // The maximum number of blocks from head whose tx indices are reserved.
+	LogHistory           uint64 `toml:",omitempty"` // The maximum number of blocks from head where a log search index is maintained.
+	LogNoHistory         bool   `toml:",omitempty"` // No log search index is maintained.
+	LogExportCheckpoints string // export log index checkpoints to file
+	StateHistory         uint64 `toml:",omitempty"` // The maximum number of blocks from head whose state histories are reserved.
 
 	// State scheme represents the scheme used to store ethereum states and trie
 	// nodes on top. It can be 'hash', 'path', or none which means use the scheme
@@ -112,6 +122,7 @@ type Config struct {
 	DatabaseHandles    int  `toml:"-"`
 	DatabaseCache      int
 	DatabaseFreezer    string
+	DatabaseEra        string
 
 	TrieCleanCache int
 	TrieDirtyCache int
@@ -121,6 +132,10 @@ type Config struct {
 
 	// This is the number of blocks for which logs will be cached in the filter system.
 	FilterLogCacheSize int
+
+	// This is the maximum number of addresses or topics allowed in filter criteria
+	// for eth_getLogs.
+	LogQueryLimit int
 
 	// Mining options
 	Miner miner.Config
@@ -135,6 +150,15 @@ type Config struct {
 	// Enables tracking of SHA3 preimages in the VM
 	EnablePreimageRecording bool
 
+	// Enables collection of witness trie access statistics
+	EnableWitnessStats bool
+
+	// Generate execution witnesses and self-check against them (testing purpose)
+	StatelessSelfValidation bool
+
+	// Enables tracking of state size
+	EnableStateSizeTracking bool
+
 	// Enables VM tracing
 	VMTrace           string
 	VMTraceJsonConfig string
@@ -145,18 +169,23 @@ type Config struct {
 	// RPCEVMTimeout is the global timeout for eth-call.
 	RPCEVMTimeout time.Duration
 
-	// RPCTxFeeCap is the global transaction fee(price * gaslimit) cap for
+	// RPCTxFeeCap is the global transaction fee (price * gas limit) cap for
 	// send-transaction variants. The unit is ether.
 	RPCTxFeeCap float64
 
-	// OverrideCancun (TODO: remove after the fork)
-	OverrideCancun *uint64 `toml:",omitempty"`
+	// OverrideOsaka (TODO: remove after the fork)
+	OverrideOsaka *uint64 `toml:",omitempty"`
+
+	// OverrideBPO1 (TODO: remove after the fork)
+	OverrideBPO1 *uint64 `toml:",omitempty"`
+
+	// OverrideBPO2 (TODO: remove after the fork)
+	OverrideBPO2 *uint64 `toml:",omitempty"`
 
 	// OverrideVerkle (TODO: remove after the fork)
 	OverrideVerkle *uint64 `toml:",omitempty"`
 
 	OverrideOptimismCanyon *uint64 `toml:",omitempty"`
-	OverrideOptimismCel2   *uint64 `toml:",omitempty"`
 
 	OverrideOptimismEcotone *uint64 `toml:",omitempty"`
 
@@ -181,6 +210,8 @@ type Config struct {
 	RollupHistoricalRPC                       string
 	RollupHistoricalRPCTimeout                time.Duration
 	RollupDisableTxPoolGossip                 bool
+	RollupTxPoolNetrestrict                   string `toml:",omitempty"` // Netrestrict for transaction gossip
+	RollupTxPoolTrustedPeersOnly              bool   // Restrict tx pool gossip to trusted peers only
 	RollupDisableTxPoolAdmission              bool
 	RollupHaltOnIncompatibleProtocolVersion   string
 
@@ -197,7 +228,7 @@ func CreateConsensusEngine(config *params.ChainConfig, db ethdb.Database) (conse
 	}
 	if config.TerminalTotalDifficulty == nil {
 		log.Error("Geth only supports PoS networks. Please transition legacy networks using Geth v1.13.x.")
-		return nil, fmt.Errorf("'terminalTotalDifficulty' is not set in genesis block")
+		return nil, errors.New("'terminalTotalDifficulty' is not set in genesis block")
 	}
 	// Wrap previously supported consensus engines into their post-merge counterpart
 	if config.Clique != nil {

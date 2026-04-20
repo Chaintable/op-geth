@@ -27,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 )
@@ -85,15 +86,16 @@ type Receipt struct {
 	TransactionIndex uint        `json:"transactionIndex"`
 
 	// Optimism: extend receipts with L1 and operator fee info
-	L1GasPrice          *big.Int   `json:"l1GasPrice,omitempty"`          // Present from pre-bedrock. L1 Basefee after Bedrock
-	L1BlobBaseFee       *big.Int   `json:"l1BlobBaseFee,omitempty"`       // Always nil prior to the Ecotone hardfork
-	L1GasUsed           *big.Int   `json:"l1GasUsed,omitempty"`           // Present from pre-bedrock, deprecated as of Fjord
-	L1Fee               *big.Int   `json:"l1Fee,omitempty"`               // Present from pre-bedrock
-	FeeScalar           *big.Float `json:"l1FeeScalar,omitempty"`         // Present from pre-bedrock to Ecotone. Nil after Ecotone
-	L1BaseFeeScalar     *uint64    `json:"l1BaseFeeScalar,omitempty"`     // Always nil prior to the Ecotone hardfork
-	L1BlobBaseFeeScalar *uint64    `json:"l1BlobBaseFeeScalar,omitempty"` // Always nil prior to the Ecotone hardfork
-	OperatorFeeScalar   *uint64    `json:"operatorFeeScalar,omitempty"`   // Always nil prior to the Isthmus hardfork
-	OperatorFeeConstant *uint64    `json:"operatorFeeConstant,omitempty"` // Always nil prior to the Isthmus hardfork
+	L1GasPrice           *big.Int   `json:"l1GasPrice,omitempty"`           // Present from pre-bedrock. L1 Basefee after Bedrock
+	L1BlobBaseFee        *big.Int   `json:"l1BlobBaseFee,omitempty"`        // Always nil prior to the Ecotone hardfork
+	L1GasUsed            *big.Int   `json:"l1GasUsed,omitempty"`            // Present from pre-bedrock, deprecated as of Fjord
+	L1Fee                *big.Int   `json:"l1Fee,omitempty"`                // Present from pre-bedrock
+	FeeScalar            *big.Float `json:"l1FeeScalar,omitempty"`          // Present from pre-bedrock to Ecotone. Nil after Ecotone
+	L1BaseFeeScalar      *uint64    `json:"l1BaseFeeScalar,omitempty"`      // Always nil prior to the Ecotone hardfork
+	L1BlobBaseFeeScalar  *uint64    `json:"l1BlobBaseFeeScalar,omitempty"`  // Always nil prior to the Ecotone hardfork
+	OperatorFeeScalar    *uint64    `json:"operatorFeeScalar,omitempty"`    // Always nil prior to the Isthmus hardfork
+	OperatorFeeConstant  *uint64    `json:"operatorFeeConstant,omitempty"`  // Always nil prior to the Isthmus hardfork
+	DAFootprintGasScalar *uint64    `json:"daFootprintGasScalar,omitempty"` // Always nil prior to the Jovian hardfork
 
 	// Celo
 	// The BaseFee is stored in fee currency for fee currency txs. We need
@@ -125,6 +127,7 @@ type receiptMarshaling struct {
 	DepositReceiptVersion *hexutil.Uint64
 	OperatorFeeScalar     *hexutil.Uint64
 	OperatorFeeConstant   *hexutil.Uint64
+	DAFootprintGasScalar  *hexutil.Uint64
 
 	// Celo
 	BaseFee *hexutil.Big
@@ -174,10 +177,15 @@ type LegacyOptimismStoredReceiptRLP struct {
 	PostStateOrStatus []byte
 	CumulativeGasUsed uint64
 	Logs              []*LogForStorage
-	L1GasUsed         *big.Int
-	L1GasPrice        *big.Int
-	L1Fee             *big.Int
-	FeeScalar         string
+
+	// Remaining fields are declared to allow the receipt RLP to be parsed without errors.
+	// However, they must not be used as they may not be populated correctly due to multiple receipt formats
+	// being combined into a single list of optional fields which can be mistaken for each other.
+	// DepositNonce (*uint64) from Regolith deposit tx receipts will be parsed into L1GasUsed
+	L1GasUsed  *big.Int `rlp:"optional"` // OVM Legacy
+	L1GasPrice *big.Int `rlp:"optional"` // OVM Legacy
+	L1Fee      *big.Int `rlp:"optional"` // OVM Legacy
+	FeeScalar  string   `rlp:"optional"` // OVM Legacy
 }
 
 // LogForStorage is a wrapper around a Log that handles
@@ -416,12 +424,72 @@ func (r *Receipt) Size() common.StorageSize {
 	return size
 }
 
+// DeriveReceiptContext holds the contextual information needed to derive a receipt
+type DeriveReceiptContext struct {
+	BlockHash    common.Hash
+	BlockNumber  uint64
+	BlockTime    uint64
+	BaseFee      *big.Int
+	BlobGasPrice *big.Int
+	GasUsed      uint64
+	LogIndex     uint // Number of logs in the block until this receipt
+	Tx           *Transaction
+	TxIndex      uint
+}
+
+// DeriveFields fills the receipt with computed fields based on consensus
+// data and contextual infos like containing block and transactions.
+func (r *Receipt) DeriveFields(signer Signer, context DeriveReceiptContext) {
+	// The transaction type and hash can be retrieved from the transaction itself
+	r.Type = context.Tx.Type()
+	r.TxHash = context.Tx.Hash()
+	r.GasUsed = context.GasUsed
+	r.EffectiveGasPrice = context.Tx.inner.effectiveGasPrice(new(big.Int), context.BaseFee)
+
+	// EIP-4844 blob transaction fields
+	if context.Tx.Type() == BlobTxType {
+		r.BlobGasUsed = context.Tx.BlobGas()
+		r.BlobGasPrice = context.BlobGasPrice
+	}
+
+	// Block location fields
+	r.BlockHash = context.BlockHash
+	r.BlockNumber = new(big.Int).SetUint64(context.BlockNumber)
+	r.TransactionIndex = context.TxIndex
+
+	// The contract address can be derived from the transaction itself
+	if context.Tx.To() == nil {
+		// Deriving the signer is expensive, only do if it's actually needed
+		from, _ := Sender(signer, context.Tx)
+		nonce := context.Tx.Nonce()
+		if r.DepositNonce != nil {
+			nonce = *r.DepositNonce
+		}
+		r.ContractAddress = crypto.CreateAddress(from, nonce)
+	} else {
+		r.ContractAddress = common.Address{}
+	}
+	// The derived log fields can simply be set from the block and transaction
+	logIndex := context.LogIndex
+	for j := 0; j < len(r.Logs); j++ {
+		r.Logs[j].BlockNumber = context.BlockNumber
+		r.Logs[j].BlockHash = context.BlockHash
+		r.Logs[j].BlockTimestamp = context.BlockTime
+		r.Logs[j].TxHash = r.TxHash
+		r.Logs[j].TxIndex = context.TxIndex
+		r.Logs[j].Index = logIndex
+		logIndex++
+	}
+	// Also derive the Bloom if not derived yet
+	r.Bloom = CreateBloom(r)
+}
+
 func (r *Receipt) SetEffectiveGasPrice(tx *Transaction, baseFee *big.Int) {
 	r.EffectiveGasPrice = tx.inner.effectiveGasPrice(new(big.Int), baseFee)
 }
 
 // ReceiptForStorage is a wrapper around a Receipt with RLP serialization
-// that omits the Bloom field and deserialization that re-computes it.
+// that omits the Bloom field. The Bloom field is recomputed by DeriveFields.
 type ReceiptForStorage Receipt
 
 // EncodeRLP implements rlp.Encoder, and flattens all content fields of a receipt
@@ -563,8 +631,8 @@ func (rs Receipts) EncodeIndex(i int, w *bytes.Buffer) {
 
 // DeriveFields fills the receipts with their computed fields based on consensus
 // data and contextual infos like containing block and transactions.
-func (rs Receipts) DeriveFields(config *params.ChainConfig, hash common.Hash, number uint64, time uint64, baseFee *big.Int, blobGasPrice *big.Int, txs []*Transaction) error {
-	signer := MakeSigner(config, new(big.Int).SetUint64(number), time)
+func (rs Receipts) DeriveFields(config *params.ChainConfig, blockHash common.Hash, blockNumber uint64, blockTime uint64, baseFee *big.Int, blobGasPrice *big.Int, txs []*Transaction) error {
+	signer := MakeSigner(config, new(big.Int).SetUint64(blockNumber), blockTime)
 
 	logIndex := uint(0)
 
@@ -573,111 +641,90 @@ func (rs Receipts) DeriveFields(config *params.ChainConfig, hash common.Hash, nu
 		return errors.New("transaction and receipt count mismatch")
 	}
 	for i := 0; i < len(txs); i++ {
-		// The transaction type and hash can be retrieved from the transaction itself
-		rs[i].Type = txs[i].Type()
-		rs[i].TxHash = txs[i].Hash()
+		var cumulativeGasUsed uint64
+		if i > 0 {
+			cumulativeGasUsed = rs[i-1].CumulativeGasUsed
+		}
+		rs[i].DeriveFields(signer, DeriveReceiptContext{
+			BlockHash:    blockHash,
+			BlockNumber:  blockNumber,
+			BlockTime:    blockTime,
+			BaseFee:      baseFee,
+			BlobGasPrice: blobGasPrice,
+			GasUsed:      rs[i].CumulativeGasUsed - cumulativeGasUsed,
+			LogIndex:     logIndex,
+			Tx:           txs[i],
+			TxIndex:      uint(i),
+		})
 
+		// Celo: Override EffectiveGasPrice for dynamic fee transactions with fee currencies
 		switch rs[i].Type {
 		case LegacyTxType, AccessListTxType:
 			// These are the non dynamic tx types so we can simply set effective gas price to gas price.
-			rs[i].EffectiveGasPrice = txs[i].inner.effectiveGasPrice(new(big.Int), baseFee)
+			// Already handled correctly by DeriveFields above
 		default:
-			// Pre-gingerbred the base fee was stored in state, but we don't try to recover it here, since A) we don't
+			// Pre-gingerbread the base fee was stored in state, but we don't try to recover it here, since A) we don't
 			// have access to the objects required to get the state and B) retrieving the base fee is quite code heavy
 			// and we don't want to bring that code across from the celo L1 to op-geth. In the celo L1 we would return a
 			// nil base fee if the state was not available, so that is what we do here.
 			//
 			// We also check for the London hardfork here, in order to not break tests from upstream that have not
 			// configured the gingerbread block, since the london hardfork introduced dynamic fee transactions.
-			if config.IsGingerbread(new(big.Int).SetUint64(number)) || config.IsLondon(new(big.Int).SetUint64(number)) {
+			if config.IsGingerbread(new(big.Int).SetUint64(blockNumber)) || config.IsLondon(new(big.Int).SetUint64(blockNumber)) {
 				// The post transition CeloDynamicFeeV2Txs set the baseFee in the receipt, so if we have it use it.
 				// Otherwise we can set the effectiveGasPrice only if the transaction does not specify a fee currency,
 				// since we would need state to discover the true base fee.
 				if rs[i].BaseFee != nil {
 					rs[i].EffectiveGasPrice = txs[i].inner.effectiveGasPrice(new(big.Int), rs[i].BaseFee)
-				} else if txs[i].FeeCurrency() == nil {
-					rs[i].EffectiveGasPrice = txs[i].inner.effectiveGasPrice(new(big.Int), baseFee)
+				} else if txs[i].FeeCurrency() != nil {
+					// Fee currency transaction without BaseFee in receipt - cannot calculate without state
+					rs[i].EffectiveGasPrice = nil
 				}
+				// else: no fee currency, DeriveFields already set EffectiveGasPrice correctly using baseFee
+			} else {
+				// Pre-gingerbread: dynamic fee transactions should have nil EffectiveGasPrice
+				rs[i].EffectiveGasPrice = nil
 			}
 		}
 
-		// EIP-4844 blob transaction fields
-		if txs[i].Type() == BlobTxType {
-			rs[i].BlobGasUsed = txs[i].BlobGas()
-			rs[i].BlobGasPrice = blobGasPrice
-		}
-
-		// block location fields
-		rs[i].BlockHash = hash
-		rs[i].BlockNumber = new(big.Int).SetUint64(number)
-		rs[i].TransactionIndex = uint(i)
-
-		// The contract address can be derived from the transaction itself
-		if txs[i].To() == nil {
-			// Deriving the signer is expensive, only do if it's actually needed
-			from, _ := Sender(signer, txs[i])
-			nonce := txs[i].Nonce()
-			if rs[i].DepositNonce != nil {
-				nonce = *rs[i].DepositNonce
-			}
-			rs[i].ContractAddress = crypto.CreateAddress(from, nonce)
-		} else {
-			rs[i].ContractAddress = common.Address{}
-		}
-
-		// The used gas can be calculated based on previous r
-		if i == 0 {
-			rs[i].GasUsed = rs[i].CumulativeGasUsed
-		} else {
-			rs[i].GasUsed = rs[i].CumulativeGasUsed - rs[i-1].CumulativeGasUsed
-		}
-
-		// The derived log fields can simply be set from the block and transaction
-		for j := 0; j < len(rs[i].Logs); j++ {
-			rs[i].Logs[j].BlockNumber = number
-			rs[i].Logs[j].BlockHash = hash
-			rs[i].Logs[j].TxHash = rs[i].TxHash
-			rs[i].Logs[j].TxIndex = uint(i)
-			rs[i].Logs[j].Index = logIndex
-			logIndex++
-		}
+		logIndex += uint(len(rs[i].Logs))
 	}
 
 	// This is a celo block receipt, which uses the block hash in place of the tx hash.
 	if len(txs)+1 == len(rs) {
 		j := len(txs)
 		for k := 0; k < len(rs[j].Logs); k++ {
-			rs[j].Logs[k].BlockNumber = number
-			rs[j].Logs[k].BlockHash = hash
-			rs[j].Logs[k].TxHash = hash
+			rs[j].Logs[k].BlockNumber = blockNumber
+			rs[j].Logs[k].BlockHash = blockHash
+			rs[j].Logs[k].TxHash = blockHash
 			rs[j].Logs[k].TxIndex = uint(j)
 			rs[j].Logs[k].Index = logIndex
 			logIndex++
 		}
 	}
 
-	if config.Optimism != nil && len(txs) >= 2 && config.IsBedrock(new(big.Int).SetUint64(number)) { // need at least an info tx and a non-info tx
-		gasParams, err := extractL1GasParams(config, time, txs[0].Data())
-		if err != nil {
-			return err
-		}
-		for i := 0; i < len(rs); i++ {
-			if txs[i].IsDepositTx() {
-				continue
-			}
-			rs[i].L1GasPrice = gasParams.l1BaseFee
-			rs[i].L1BlobBaseFee = gasParams.l1BlobBaseFee
-			rs[i].L1Fee, rs[i].L1GasUsed = gasParams.costFunc(txs[i].RollupCostData())
-			rs[i].FeeScalar = gasParams.feeScalar
-			rs[i].L1BaseFeeScalar = u32ptrTou64ptr(gasParams.l1BaseFeeScalar)
-			rs[i].L1BlobBaseFeeScalar = u32ptrTou64ptr(gasParams.l1BlobBaseFeeScalar)
-			if gasParams.operatorFeeScalar != nil && gasParams.operatorFeeConstant != nil && (*gasParams.operatorFeeScalar != 0 || *gasParams.operatorFeeConstant != 0) {
-				rs[i].OperatorFeeScalar = u32ptrTou64ptr(gasParams.operatorFeeScalar)
-				rs[i].OperatorFeeConstant = gasParams.operatorFeeConstant
-			}
-		}
+	if config.IsOptimismBedrock(new(big.Int).SetUint64(blockNumber)) && len(txs) >= 2 {
+		return rs.deriveOPStackFields(config, blockTime, txs)
 	}
 	return nil
+}
+
+// EncodeBlockReceiptLists encodes a list of block receipt lists into RLP.
+func EncodeBlockReceiptLists(receipts []Receipts) []rlp.RawValue {
+	var storageReceipts []*ReceiptForStorage
+	result := make([]rlp.RawValue, len(receipts))
+	for i, receipt := range receipts {
+		storageReceipts = storageReceipts[:0]
+		for _, r := range receipt {
+			storageReceipts = append(storageReceipts, (*ReceiptForStorage)(r))
+		}
+		bytes, err := rlp.EncodeToBytes(storageReceipts)
+		if err != nil {
+			log.Crit("Failed to encode block receipts", "err", err)
+		}
+		result[i] = bytes
+	}
+	return result
 }
 
 func u32ptrTou64ptr(a *uint32) *uint64 {

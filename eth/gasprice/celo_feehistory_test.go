@@ -30,7 +30,6 @@ import (
 	"github.com/ethereum/go-ethereum/contracts"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -77,7 +76,7 @@ func newCeloTestBackend(t *testing.T, pending bool, genBlock func(i int, b *core
 	})
 
 	gspec.Config.TerminalTotalDifficulty = new(big.Int).SetUint64(td)
-	chain, err := core.NewBlockChain(db, &core.CacheConfig{TrieCleanNoPrefetch: true}, gspec, nil, engine, vm.Config{}, nil)
+	chain, err := core.NewBlockChain(db, gspec, engine, nil)
 	if err != nil {
 		t.Fatalf("failed to create local chain, %v", err)
 	}
@@ -89,10 +88,13 @@ func newCeloTestBackend(t *testing.T, pending bool, genBlock func(i int, b *core
 	chain.SetSafe(chain.GetBlockByNumber(25).Header())
 
 	state, _ := chain.State()
+	head := chain.CurrentBlock()
 
 	backend := contracts.CeloBackend{
 		ChainConfig: &config,
 		State:       state,
+		BlockNumber: head.Number,
+		Time:        head.Time,
 	}
 	exchangeRates, err := contracts.GetExchangeRates(&backend)
 	if err != nil {

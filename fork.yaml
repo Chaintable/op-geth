@@ -6,7 +6,7 @@ footer: |
 base:
   name: op-geth
   url: https://github.com/celo-org/op-geth
-  ref: refs/remotes/origin/celo12-upstream
+  ref: refs/remotes/origin/celo-rebase-15-upstream
 fork:
   name: Celo
   url: https://github.com/celo-org/op-geth
@@ -59,6 +59,7 @@ def:
           description: ""
           globs:
             - "params/config.go"
+            - "params/config_op.go"
             - "params/protocol_params.go"
             - "core/genesis.go"
         - title: "E2E tests"

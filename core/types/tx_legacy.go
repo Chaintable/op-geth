@@ -142,3 +142,30 @@ func (tx *LegacyTx) encode(*bytes.Buffer) error {
 func (tx *LegacyTx) decode([]byte) error {
 	panic("decode called on LegacyTx)")
 }
+
+// OBS: This is the post-EIP155 hash, the pre-EIP155 does not contain a chainID.
+func (tx *LegacyTx) sigHash(chainID *big.Int) common.Hash {
+	if tx.CeloLegacy {
+		return rlpHash([]any{
+			tx.Nonce,
+			tx.GasPrice,
+			tx.Gas,
+			tx.FeeCurrency,
+			tx.GatewayFeeRecipient,
+			tx.GatewayFee,
+			tx.To,
+			tx.Value,
+			tx.Data,
+			chainID, uint(0), uint(0),
+		})
+	}
+	return rlpHash([]any{
+		tx.Nonce,
+		tx.GasPrice,
+		tx.Gas,
+		tx.To,
+		tx.Value,
+		tx.Data,
+		chainID, uint(0), uint(0),
+	})
+}

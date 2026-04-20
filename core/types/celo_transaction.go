@@ -113,8 +113,8 @@ func CompareWithRates(a, b *Transaction, ratesAndFees *exchange.RatesAndFees) in
 	}
 	rates := ratesAndFees.Rates
 	if ratesAndFees.HasBaseFee() {
-		tipA := a.EffectiveGasTipValue(ratesAndFees.GetBaseFeeIn(a.FeeCurrency()))
-		tipB := b.EffectiveGasTipValue(ratesAndFees.GetBaseFeeIn(b.FeeCurrency()))
+		tipA, _ := a.EffectiveGasTip(ratesAndFees.GetBaseFeeIn(a.FeeCurrency()))
+		tipB, _ := b.EffectiveGasTip(ratesAndFees.GetBaseFeeIn(b.FeeCurrency()))
 		c, _ := exchange.CompareValue(rates, tipA, a.FeeCurrency(), tipB, b.FeeCurrency())
 		return c
 	}
@@ -132,21 +132,4 @@ func CompareWithRates(a, b *Transaction, ratesAndFees *exchange.RatesAndFees) in
 	tipCapB := b.inner.gasTipCap()
 	c, _ = exchange.CompareValue(rates, tipCapA, a.FeeCurrency(), tipCapB, b.FeeCurrency())
 	return c
-}
-
-// SetYNullStyleBigIfZero is for use by tests only, it sets the Y (AKA V) field of the transaction to big.NewInt(0)
-// which internally ensures that the abs field of the big int is null as opposed to an empty slice. The reason for doing
-// this is to facilitate direct deep equal comparisons of transactions, which although they may share the same value for
-// V have different internal representations.
-func SetYNullStyleBigIfZero(tx *Transaction) {
-	switch itx := tx.inner.(type) {
-	case *DynamicFeeTx:
-		if itx.V.Sign() == 0 {
-			itx.V = big.NewInt(0)
-		}
-	case *AccessListTx:
-		if itx.V.Sign() == 0 {
-			itx.V = big.NewInt(0)
-		}
-	}
 }

@@ -131,7 +131,7 @@ func (ec *Client) BlockReceipts(ctx context.Context, blockNrOrHash rpc.BlockNumb
 }
 
 type rpcBlock struct {
-	Hash         common.Hash         `json:"hash"`
+	Hash         *common.Hash        `json:"hash"`
 	Transactions []rpcTransaction    `json:"transactions"`
 	UncleHashes  []common.Hash       `json:"uncles"`
 	Withdrawals  []*types.Withdrawal `json:"withdrawals,omitempty"`
@@ -158,6 +158,12 @@ func (ec *Client) getBlock(ctx context.Context, method string, args ...interface
 	if err := json.Unmarshal(raw, &body); err != nil {
 		return nil, err
 	}
+	// Pending blocks don't return a block hash, compute it for sender caching.
+	if body.Hash == nil {
+		tmp := head.Hash()
+		body.Hash = &tmp
+	}
+
 	// Quick-verify transaction and uncle lists. This mostly helps with debugging the server.
 	if head.UncleHash == types.EmptyUncleHash && len(body.UncleHashes) > 0 {
 		return nil, errors.New("server returned non-empty uncle list but block header indicates no uncles")
@@ -202,7 +208,7 @@ func (ec *Client) getBlock(ctx context.Context, method string, args ...interface
 	txs := make([]*types.Transaction, len(body.Transactions))
 	for i, tx := range body.Transactions {
 		if tx.From != nil {
-			setSenderFromServer(tx.tx, *tx.From, body.Hash)
+			setSenderFromServer(tx.tx, *tx.From, *body.Hash)
 		}
 		txs[i] = tx.tx
 	}
@@ -345,6 +351,15 @@ func (ec *Client) TransactionReceipt(ctx context.Context, txHash common.Hash) (*
 		return nil, ethereum.NotFound
 	}
 	return r, err
+}
+
+// SubscribeTransactionReceipts subscribes to notifications about transaction receipts.
+func (ec *Client) SubscribeTransactionReceipts(ctx context.Context, q *ethereum.TransactionReceiptsQuery, ch chan<- []*types.Receipt) (ethereum.Subscription, error) {
+	sub, err := ec.c.EthSubscribe(ctx, ch, "transactionReceipts", q)
+	if err != nil {
+		return nil, err
+	}
+	return sub, nil
 }
 
 // SyncProgress retrieves the current progress of the sync algorithm. If there's
@@ -621,6 +636,15 @@ func (ec *Client) SuggestGasTipCapForCurrency(ctx context.Context, feeCurrency *
 	return (*big.Int)(&hex), nil
 }
 
+// BlobBaseFee retrieves the current blob base fee.
+func (ec *Client) BlobBaseFee(ctx context.Context) (*big.Int, error) {
+	var hex hexutil.Big
+	if err := ec.c.CallContext(ctx, &hex, "eth_blobBaseFee"); err != nil {
+		return nil, err
+	}
+	return (*big.Int)(&hex), nil
+}
+
 type feeHistoryResultMarshaling struct {
 	OldestBlock  *hexutil.Big     `json:"oldestBlock"`
 	Reward       [][]*hexutil.Big `json:"reward,omitempty"`
@@ -654,12 +678,38 @@ func (ec *Client) FeeHistory(ctx context.Context, blockCount uint64, lastBlock *
 }
 
 // EstimateGas tries to estimate the gas needed to execute a specific transaction based on
-// the current pending state of the backend blockchain. There is no guarantee that this is
-// the true gas limit requirement as other transactions may be added or removed by miners,
-// but it should provide a basis for setting a reasonable default.
+// the current state of the backend blockchain. There is no guarantee that this is the
+// true gas limit requirement as other transactions may be added or removed by miners, but
+// it should provide a basis for setting a reasonable default.
+//
+// Note that the state used by this method is implementation-defined by the remote RPC
+// server, but it's reasonable to assume that it will either be the pending or latest
+// state.
 func (ec *Client) EstimateGas(ctx context.Context, msg ethereum.CallMsg) (uint64, error) {
 	var hex hexutil.Uint64
 	err := ec.c.CallContext(ctx, &hex, "eth_estimateGas", toCallArg(msg))
+	if err != nil {
+		return 0, err
+	}
+	return uint64(hex), nil
+}
+
+// EstimateGasAtBlock is almost the same as EstimateGas except that it selects the block height
+// instead of using the remote RPC's default state for gas estimation.
+func (ec *Client) EstimateGasAtBlock(ctx context.Context, msg ethereum.CallMsg, blockNumber *big.Int) (uint64, error) {
+	var hex hexutil.Uint64
+	err := ec.c.CallContext(ctx, &hex, "eth_estimateGas", toCallArg(msg), toBlockNumArg(blockNumber))
+	if err != nil {
+		return 0, err
+	}
+	return uint64(hex), nil
+}
+
+// EstimateGasAtBlockHash is almost the same as EstimateGas except that it selects the block
+// hash instead of using the remote RPC's default state for gas estimation.
+func (ec *Client) EstimateGasAtBlockHash(ctx context.Context, msg ethereum.CallMsg, blockHash common.Hash) (uint64, error) {
+	var hex hexutil.Uint64
+	err := ec.c.CallContext(ctx, &hex, "eth_estimateGas", toCallArg(msg), rpc.BlockNumberOrHashWithHash(blockHash, false))
 	if err != nil {
 		return 0, err
 	}
@@ -742,6 +792,9 @@ func toCallArg(msg ethereum.CallMsg) interface{} {
 	if msg.BlobHashes != nil {
 		arg["blobVersionedHashes"] = msg.BlobHashes
 	}
+	if msg.AuthorizationList != nil {
+		arg["authorizationList"] = msg.AuthorizationList
+	}
 	if msg.FeeCurrency != nil {
 		arg["feeCurrency"] = msg.FeeCurrency
 	}
@@ -771,6 +824,7 @@ type rpcProgress struct {
 	HealingBytecode        hexutil.Uint64
 	TxIndexFinishedBlocks  hexutil.Uint64
 	TxIndexRemainingBlocks hexutil.Uint64
+	StateIndexRemaining    hexutil.Uint64
 }
 
 func (p *rpcProgress) toSyncProgress() *ethereum.SyncProgress {
@@ -797,5 +851,6 @@ func (p *rpcProgress) toSyncProgress() *ethereum.SyncProgress {
 		HealingBytecode:        uint64(p.HealingBytecode),
 		TxIndexFinishedBlocks:  uint64(p.TxIndexFinishedBlocks),
 		TxIndexRemainingBlocks: uint64(p.TxIndexRemainingBlocks),
+		StateIndexRemaining:    uint64(p.StateIndexRemaining),
 	}
 }
