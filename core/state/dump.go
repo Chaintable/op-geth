@@ -39,6 +39,9 @@ type DumpConfig struct {
 	OnlyWithAddresses bool
 	Start             []byte
 	Max               uint64
+	// UseStorageKeyHash, when true, stores storage keys as their trie hash (do not
+	// require preimage lookup). Only consumed by dumpToCollector2/RawDump2.
+	UseStorageKeyHash bool
 }
 
 // DumpCollector interface which the state trie calls during iteration
@@ -387,15 +390,19 @@ func (s *StateDB) dumpToCollector2(c DumpCollector, conf *DumpConfig) (nextKey [
 			for storageIt.Next() {
 				_, content, _, err := rlp.Split(storageIt.Value)
 				if err != nil {
-					log.Error("[GenesisStateDump] Failed to decode the value returned by iterator", "error", err)
+					log.Error("[L2GenesisStateDump] Failed to decode the value returned by iterator", "error", err)
 					continue
 				}
-				key := storageTr.GetKey(storageIt.Key)
-				if key == nil {
-					missingStoragePreimages++
-					continue
+				if conf.UseStorageKeyHash {
+					account.Storage[common.BytesToHash(storageIt.Key)] = common.Bytes2Hex(content)
+				} else {
+					key := storageTr.GetKey(storageIt.Key)
+					if key == nil {
+						missingStoragePreimages++
+						continue
+					}
+					account.Storage[common.BytesToHash(key)] = common.Bytes2Hex(content)
 				}
-				account.Storage[common.BytesToHash(key)] = common.Bytes2Hex(content)
 			}
 		}
 		c.OnAccount(address, account)
@@ -462,6 +469,7 @@ func (s *StateDB) RawDump2(opts *DumpConfig, dataDir string) (Dump, error) {
 		SkipCode:          opts.SkipCode,
 		SkipStorage:       opts.SkipStorage,
 		OnlyWithAddresses: opts.OnlyWithAddresses,
+		UseStorageKeyHash: opts.UseStorageKeyHash,
 		Start:             progress.NextKey,
 		Max:               batchSize,
 	}

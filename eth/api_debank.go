@@ -269,6 +269,7 @@ func (api *DebankAPI) prepareL1Data() {
 		SkipCode:          false,
 		SkipStorage:       false,
 		OnlyWithAddresses: false,
+		UseStorageKeyHash: true,
 	}, api.eth.dataDir)
 	if dumpErr != nil {
 		err = fmt.Errorf("failed to dump state at l1 block: %w", dumpErr)
