@@ -455,7 +455,7 @@ func (s *StateDB) RawDump2(opts *DumpConfig, dataDir string) (Dump, error) {
 	}
 
 	if progress.Root == "" {
-		progress.Root = fmt.Sprintf("%x", s.trie.Hash())
+		progress.Root = fmt.Sprintf("%x", s.originalRoot)
 	}
 
 	batchOpts := &DumpConfig{
