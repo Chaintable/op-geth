@@ -99,6 +99,7 @@ var (
 		utils.TxLookupLimitFlag, // deprecated
 		utils.TransactionHistoryFlag,
 		utils.StateHistoryFlag,
+		utils.TriesInMemoryFlag,
 		utils.ProposeBlockIntervalFlag,
 		utils.PathDBNodeBufferTypeFlag,
 		utils.EnableProofKeeperFlag,

@@ -62,6 +62,7 @@ var Defaults = Config{
 	TrieDirtyCache:         256,
 	TrieTimeout:            60 * time.Minute,
 	TrieCommitInterval:     0,
+	TriesInMemory:          128,
 	SnapshotCache:          102,
 	FilterLogCacheSize:     32,
 	Miner:                  miner.DefaultConfig,
@@ -87,6 +88,7 @@ var OpBNBDefaults = Config{
 	TrieDirtyCache:         256,
 	TrieTimeout:            60 * time.Minute,
 	TrieCommitInterval:     3600,
+	TriesInMemory:          128,
 	NoTries:                false,
 	SnapshotCache:          102,
 	FilterLogCacheSize:     32,
@@ -160,6 +162,7 @@ type Config struct {
 	TrieDirtyCache     int
 	TrieTimeout        time.Duration
 	TrieCommitInterval uint64 // Define a block height interval, commit trie every TrieCommitInterval block height.
+	TriesInMemory      uint64 // Number of recent block tries to keep in memory before dereferencing (default = 128)
 	SnapshotCache      int
 	Preimages          bool
 	NoTries            bool

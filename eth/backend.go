@@ -251,6 +251,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			StateHistory:         config.StateHistory,
 			StateScheme:          config.StateScheme,
 			TrieCommitInterval:   config.TrieCommitInterval,
+			TriesInMemory:        config.TriesInMemory,
 			PathNodeBuffer:       config.PathNodeBuffer,
 			ProposeBlockInterval: config.ProposeBlockInterval,
 			EnableProofKeeper:    config.EnableProofKeeper,

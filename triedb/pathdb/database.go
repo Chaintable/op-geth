@@ -113,6 +113,7 @@ type Config struct {
 	JournalFilePath      string         // The journal file path
 	JournalFile          bool           // Whether to use journal file mode
 	UseBase              bool           // Flag to use base and no other buffers for nodebufferlist, it's used for init genesis and unit tes
+	MaxDiffLayers        int            // Maximum diff layers allowed in the layer tree (default = 128)
 }
 
 // sanitize checks the provided user configurations and changes anything that's
@@ -123,6 +124,9 @@ func (c *Config) sanitize() *Config {
 		log.Warn("Sanitizing invalid node buffer size", "provided", common.StorageSize(conf.DirtyCacheSize), "updated", common.StorageSize(MaxBufferSize))
 		conf.DirtyCacheSize = MaxBufferSize
 	}
+	if conf.MaxDiffLayers == 0 {
+		conf.MaxDiffLayers = maxDiffLayers
+	}
 	return &conf
 }
 
@@ -131,6 +135,7 @@ var Defaults = &Config{
 	StateHistory:   params.FullImmutabilityThreshold,
 	CleanCacheSize: defaultCleanSize,
 	DirtyCacheSize: DefaultBufferSize,
+	MaxDiffLayers:  maxDiffLayers,
 }
 
 // ReadOnly is the config in order to open database in read only mode.
@@ -280,7 +285,7 @@ func (db *Database) Update(root common.Hash, parentRoot common.Hash, block uint6
 		// - head-1 layer is paired with HEAD-1 state
 		// - head-127 layer(bottom-most diff layer) is paired with HEAD-127 state
 		// - head-128 layer(disk layer) is paired with HEAD-128 state
-		err := db.tree.cap(root, maxDiffLayers)
+		err := db.tree.cap(root, db.config.MaxDiffLayers)
 		if err != nil {
 			log.Crit("failed to cap layer tree", "error", err)
 		}

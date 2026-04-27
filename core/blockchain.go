@@ -171,7 +171,8 @@ type CacheConfig struct {
 	JournalFile          bool                  // Whether to enable journal file
 	UseBase              bool                  // Flag if just use base for nodebufferlist
 
-	TrieCommitInterval uint64 // Define a block height interval, commit trie every TrieCommitInterval block height.
+	TrieCommitInterval uint64  // Define a block height interval, commit trie every TrieCommitInterval block height.
+	TriesInMemory      uint64  // Number of recent block tries to keep in memory before dereferencing (default = 128)
 }
 
 // triedbConfig derives the configures for trie database.
@@ -195,6 +196,7 @@ func (c *CacheConfig) triedbConfig(keepFunc pathdb.NotifyKeepFunc) *triedb.Confi
 			NotifyKeep:           keepFunc,
 			JournalFilePath:      c.JournalFilePath,
 			JournalFile:          c.JournalFile,
+			MaxDiffLayers:        int(c.TriesInMemory),
 		}
 	}
 	return config
@@ -209,6 +211,7 @@ var defaultCacheConfig = &CacheConfig{
 	SnapshotLimit:  256,
 	SnapshotWait:   true,
 	StateScheme:    rawdb.HashScheme,
+	TriesInMemory:  TriesInMemory,
 }
 
 // DefaultCacheConfigWithScheme returns a deep copied default cache config with
@@ -1114,28 +1117,23 @@ func (bc *BlockChain) Stop() {
 			log.Info("Failed to stop proof keeper", "err", err)
 		}
 	} else {
-		// Ensure the state of a recent block is also stored to disk before exiting.
-		// We're writing three different states to catch different restart scenarios:
-		//  - HEAD:     So we don't need to reprocess any blocks in the general case
-		//  - HEAD-1:   So we don't do large reorgs if our HEAD becomes an uncle
-		//  - HEAD-127: So we have a hard limit on the number of blocks reexecuted
+		// Ensure the state of all recent blocks within the TriesInMemory window
+		// is stored to disk before exiting, so that the entire window is queryable
+		// after restart without any gap.
 		if !bc.cacheConfig.TrieDirtyDisabled {
 			triedb := bc.triedb
 
-			blockOffsets := []uint64{0, 1, TriesInMemory - 1}
-			if bc.cacheConfig.TrieCommitInterval != 0 {
-				current := bc.CurrentBlock().Number.Uint64()
-				blockShouldCommitOffset := current - current/bc.cacheConfig.TrieCommitInterval*bc.cacheConfig.TrieCommitInterval
-				if blockShouldCommitOffset > 1 && blockShouldCommitOffset < TriesInMemory-1 {
-					blockOffsets = append(blockOffsets, blockShouldCommitOffset)
-				}
+			current := bc.CurrentBlock().Number.Uint64()
+			end := uint64(0)
+			if current > bc.cacheConfig.TriesInMemory {
+				end = current - bc.cacheConfig.TriesInMemory
 			}
-			for _, offset := range blockOffsets {
-				if number := bc.CurrentBlock().Number.Uint64(); number > offset {
-					recent := bc.GetBlockByNumber(number - offset)
-					log.Info("Writing cached state to disk", "block", recent.Number(), "hash", recent.Hash(), "root", recent.Root())
-					if err := triedb.Commit(recent.Root(), true); err != nil {
-						log.Error("Failed to commit recent state trie", "err", err)
+			log.Info("Writing all cached states to disk", "from", current, "to", end+1, "count", current-end)
+			for num := current; num > end; num-- {
+				recent := bc.GetBlockByNumber(num)
+				if recent != nil {
+					if err := triedb.Commit(recent.Root(), num == current); err != nil {
+						log.Error("Failed to commit recent state trie", "block", num, "err", err)
 					}
 				}
 			}
@@ -1572,7 +1570,7 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 
 	// Flush limits are not considered for the first TriesInMemory blocks.
 	current := block.NumberU64()
-	if current <= TriesInMemory {
+	if current <= bc.cacheConfig.TriesInMemory {
 		return nil
 	}
 	// If we exceeded our memory allowance, flush matured singleton nodes to disk
@@ -1584,7 +1582,7 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 		bc.triedb.Cap(limit - ethdb.IdealBatchSize)
 	}
 	// Find the next state trie we need to commit
-	chosen := current - TriesInMemory
+	chosen := current - bc.cacheConfig.TriesInMemory
 	flushInterval := time.Duration(bc.flushInterval.Load())
 	// If we exceeded time allowance, flush an entire trie to disk
 	if bc.gcproc > flushInterval || (bc.cacheConfig.TrieCommitInterval != 0 && chosen%bc.cacheConfig.TrieCommitInterval == 0) {
@@ -1596,8 +1594,8 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 		} else {
 			// If we're exceeding limits but haven't reached a large enough memory gap,
 			// warn the user that the system is becoming unstable.
-			if chosen < bc.lastWrite+TriesInMemory && bc.gcproc >= 2*flushInterval {
-				log.Info("State in memory for too long, committing", "time", bc.gcproc, "allowance", flushInterval, "optimum", float64(chosen-bc.lastWrite)/TriesInMemory)
+			if chosen < bc.lastWrite+bc.cacheConfig.TriesInMemory && bc.gcproc >= 2*flushInterval {
+				log.Info("State in memory for too long, committing", "time", bc.gcproc, "allowance", flushInterval, "optimum", float64(chosen-bc.lastWrite)/float64(bc.cacheConfig.TriesInMemory))
 			}
 			// Flush an entire trie and restart the counters
 			bc.triedb.Commit(header.Root, true)

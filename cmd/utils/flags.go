@@ -364,6 +364,12 @@ var (
 		Value:    ethconfig.Defaults.StateHistory,
 		Category: flags.StateCategory,
 	}
+	TriesInMemoryFlag = &cli.Uint64Flag{
+		Name:     "triesinmemory",
+		Usage:    "Number of recent block tries to keep in memory before dereferencing (default = 128)",
+		Value:    ethconfig.Defaults.TriesInMemory,
+		Category: flags.StateCategory,
+	}
 	TransactionHistoryFlag = &cli.Uint64Flag{
 		Name:     "history.transactions",
 		Usage:    "Number of recent blocks to maintain transactions index for (default = about one year, 0 = entire chain)",
@@ -1937,6 +1943,9 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	}
 	if ctx.IsSet(StateHistoryFlag.Name) {
 		cfg.StateHistory = ctx.Uint64(StateHistoryFlag.Name)
+	}
+	if ctx.IsSet(TriesInMemoryFlag.Name) {
+		cfg.TriesInMemory = ctx.Uint64(TriesInMemoryFlag.Name)
 	}
 	if ctx.IsSet(StateSchemeFlag.Name) {
 		cfg.StateScheme = ctx.String(StateSchemeFlag.Name)
