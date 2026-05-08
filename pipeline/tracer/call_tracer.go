@@ -166,6 +166,9 @@ func (t *callTracer) ToTrace(f *callFrame, traceAddress []int64) ptypes.Trace {
 }
 
 func (t *callTracer) CaptureState(pc uint64, op vm.OpCode, gas, cost uint64, scope *vm.ScopeContext, rData []byte, depth int, err error) {
+	if len(t.callstack) == 0 {
+		return
+	}
 	if op == vm.SSTORE {
 		t.callstack[len(t.callstack)-1].SelfStorageChange = true
 		t.callstack[len(t.callstack)-1].StorageChange = true
@@ -256,6 +259,9 @@ func (t *callTracer) OnTxEnd(receipt *types.Receipt, err error) {
 	if err != nil {
 		return
 	}
+	if len(t.callstack) == 0 {
+		return
+	}
 	setParentFailed(&t.callstack[0], false)
 	setStorageChange(&t.callstack[0])
 	if len(t.callstack) == 1 {
@@ -273,6 +279,9 @@ func (t *callTracer) OnTxEnd(receipt *types.Receipt, err error) {
 func (t *callTracer) OnLog(log *types.Log) {
 	// Skip if tracing was interrupted
 	if t.interrupt.Load() {
+		return
+	}
+	if len(t.callstack) == 0 {
 		return
 	}
 	topics := make([]string, len(log.Topics))
