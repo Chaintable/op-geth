@@ -23,12 +23,15 @@ import (
 	"path/filepath"
 	"time"
 
+	ptypes "github.com/Chaintable/pipeline/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
+	"github.com/holiman/uint256"
 )
 
 // DumpConfig is a set of options to control what portions of the state will be
@@ -529,4 +532,65 @@ func (s *StateDB) RawDump2(opts *DumpConfig, dataDir string) (Dump, error) {
 		Root:     progress.Root,
 		Accounts: allAccounts,
 	}, nil
+}
+
+type Alloc struct {
+	Root     common.Hash
+	Accounts map[common.Hash]DumpAccount
+}
+
+func (a *Alloc) OnRoot(root common.Hash) {
+	a.Root = root
+}
+func (a *Alloc) OnAccount(addr *common.Address, account DumpAccount) {
+	if addr == nil {
+		a.Accounts[common.BytesToHash(account.AddressHash)] = account
+	} else {
+		a.Accounts[crypto.Keccak256Hash(addr.Bytes())] = account
+	}
+}
+
+func (a *Alloc) ToStorageDiff(UseStorageKeyHash bool) *ptypes.BlockStorageDiff {
+	diff := &ptypes.BlockStorageDiff{
+		Hash:            a.Root,
+		ParentHash:      types.EmptyRootHash,
+		NewAccounts:     make([]ptypes.NewAccount, 0),
+		DeletedAccounts: make([]common.Hash, 0),
+		StorageDiff:     make([]ptypes.AccountStorageDiff, 0),
+		NewCodes:        make([]ptypes.NewCode, 0),
+	}
+	for addrHash, acc := range a.Accounts {
+		diff.NewAccounts = append(diff.NewAccounts, ptypes.NewAccount{
+			Address:  addrHash,
+			Balance:  uint256.MustFromDecimal(acc.Balance),
+			Nonce:    acc.Nonce,
+			CodeHash: crypto.HashData(crypto.NewKeccakState(), acc.Code),
+		})
+		if len(acc.Code) > 0 {
+			diff.NewCodes = append(diff.NewCodes, ptypes.NewCode{
+				CodeHash: crypto.HashData(crypto.NewKeccakState(), acc.Code),
+				Code:     acc.Code,
+			})
+		}
+		values := make([]ptypes.IndexValuePair, 0)
+		for index, storageValue := range acc.Storage {
+			v := common.HexToHash(storageValue)
+			value := uint256.NewInt(0).SetBytes(v.Bytes())
+			var hashedIndex common.Hash
+			if UseStorageKeyHash {
+				hashedIndex = common.BytesToHash(index[:])
+			} else {
+				hashedIndex = crypto.Keccak256Hash(index[:])
+			}
+			values = append(values, ptypes.IndexValuePair{
+				Index: hashedIndex,
+				Value: value,
+			})
+		}
+		diff.StorageDiff = append(diff.StorageDiff, ptypes.AccountStorageDiff{
+			Address: addrHash,
+			Values:  values,
+		})
+	}
+	return diff
 }

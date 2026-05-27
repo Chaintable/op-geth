@@ -27,6 +27,7 @@ package tracing
 import (
 	"math/big"
 
+	ptypes "github.com/Chaintable/pipeline/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
@@ -191,6 +192,8 @@ type (
 
 	// CommitHook is called when the state is committed.
 	CommitHook = func(originRoot common.Hash, root common.Hash, destructs map[common.Hash]struct{}, accounts map[common.Hash][]byte, accountsOrigin map[common.Address][]byte, storages map[common.Hash]map[common.Hash][]byte, storagesOrigin map[common.Address]map[common.Hash][]byte, codes map[common.Hash][]byte)
+
+	CeloGenesisBlockHook = func(genesis *types.Block, blockDiff *ptypes.BlockStorageDiff)
 )
 
 type Hooks struct {
@@ -227,7 +230,8 @@ type Hooks struct {
 	TraceDebitCredit bool
 
 	// custom hook
-	OnCommit CommitHook
+	OnCommit           CommitHook
+	OnCeloGenesisBlock CeloGenesisBlockHook
 }
 
 // BalanceChangeReason is used to indicate the reason for a balance change, useful
