@@ -786,14 +786,12 @@ func dumpStateS3(ctx *cli.Context) error {
 	triedb := utils.MakeTrieDatabase(ctx, stack, chaindb, false, true, false)
 	defer triedb.Close()
 
-	nodeXPusher, err := processor.NewPushProcessor(region, nodeXBucket, brokers, topic, "")
+	publisher, err := newSnapshotDumpPublisher(region, nodeXBucket, chainTableBucket, brokers, topic)
 	if err != nil {
 		return err
 	}
-	chainTableBucketPusher, err := processor.NewPushProcessor(region, chainTableBucket, brokers, topic, "")
-	if err != nil {
-		return err
-	}
+	defer publisher.close()
+
 	// upload chaintable bucket
 	{
 		blockFile := &ptypes.BlockFile{
@@ -809,7 +807,7 @@ func dumpStateS3(ctx *cli.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to serialize block header: %v", err)
 		}
-		err = chainTableBucketPusher.UploadFile(s3BlockFile)
+		err = publisher.uploadChainTable(s3BlockFile)
 		if err != nil {
 			return fmt.Errorf("failed to upload block header: %v", err)
 		}
@@ -818,7 +816,7 @@ func dumpStateS3(ctx *cli.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to serialize block file validation: %v", err)
 		}
-		err = chainTableBucketPusher.UploadFile(blockFileValidation)
+		err = publisher.uploadChainTable(blockFileValidation)
 		if err != nil {
 			return fmt.Errorf("failed to upload block file validation: %v", err)
 		}
@@ -831,7 +829,7 @@ func dumpStateS3(ctx *cli.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to serialize block header: %v", err)
 		}
-		err = nodeXPusher.UploadFile(s3BlockFile)
+		err = publisher.uploadNodeX(s3BlockFile)
 		if err != nil {
 			return fmt.Errorf("failed to upload block header: %v", err)
 		}
@@ -947,7 +945,7 @@ func dumpStateS3(ctx *cli.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to serialize block header: %v", err)
 		}
-		err = nodeXPusher.UploadFile(s3BlockFile)
+		err = publisher.uploadNodeX(s3BlockFile)
 		if err != nil {
 			return fmt.Errorf("failed to upload block header: %v", err)
 		}
@@ -964,5 +962,5 @@ func dumpStateS3(ctx *cli.Context) error {
 			},
 		},
 	}
-	return nodeXPusher.PushBlockChangeNotification(blockChanges)
+	return publisher.pushBlockChangeNotification(blockChanges)
 }
