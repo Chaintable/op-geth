@@ -7,6 +7,8 @@ import (
 	ptypes "github.com/Chaintable/pipeline/types"
 	putil "github.com/Chaintable/pipeline/util"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/segmentio/kafka-go"
 )
 
@@ -42,6 +44,7 @@ func (p *snapshotDumpPublisher) uploadFile(bucket string, file *processor.DataFi
 	if err := putil.UploadFileToS3(p.s3Client, bucket, file.S3key, file.Data, true); err != nil {
 		return fmt.Errorf("failed to upload %s to s3 bucket %s: %w", file.S3key, bucket, err)
 	}
+	log.Info("Uploaded snapshot dump file to s3", "bucket", bucket, "key", file.S3key, "kind", file.Kind, "size", common.StorageSize(len(file.Data)))
 	return nil
 }
 
