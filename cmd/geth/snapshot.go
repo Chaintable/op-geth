@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,12 +32,14 @@ import (
 	"github.com/Chaintable/pipeline/util"
 	"github.com/ethereum/go-ethereum/cmd/utils"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/state/pruner"
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
@@ -161,10 +164,6 @@ block is used.
 				ArgsUsage: "[? <blockHash> | <blockNum>]",
 				Action:    dumpStateS3,
 				Flags: slices.Concat([]cli.Flag{
-					utils.ExcludeCodeFlag,
-					utils.ExcludeStorageFlag,
-					utils.StartKeyFlag,
-					utils.DumpLimitFlag,
 					utils.PipelineVersionFlag,
 				}, utils.NetworkFlags, utils.DatabaseFlags, utils.S3Flags, utils.KafkaFlags),
 				Description: `
@@ -717,21 +716,63 @@ func checkAccount(ctx *cli.Context) error {
 	return nil
 }
 
+func parseDumpBlock(chaindb ethdb.Reader, ctx *cli.Context) (*types.Block, error) {
+	if ctx.NArg() > 1 {
+		return nil, fmt.Errorf("expected 0 or 1 argument (number or hash), got %d", ctx.NArg())
+	}
+	var block *types.Block
+	if ctx.NArg() == 1 {
+		arg := ctx.Args().First()
+		if number, err := strconv.ParseUint(arg, 10, 64); err == nil {
+			hash := rawdb.ReadCanonicalHash(chaindb, number)
+			if hash == (common.Hash{}) {
+				return nil, fmt.Errorf("block %d not found", number)
+			}
+			block = rawdb.ReadBlock(chaindb, hash, number)
+			if block == nil {
+				return nil, fmt.Errorf("block %d (%s) not found", number, hash)
+			}
+		} else {
+			var hash common.Hash
+			if err := hash.UnmarshalText([]byte(arg)); err != nil {
+				return nil, fmt.Errorf("invalid block argument %q: expected block number or hash: %w", arg, err)
+			}
+			number, ok := rawdb.ReadHeaderNumber(chaindb, hash)
+			if !ok {
+				return nil, fmt.Errorf("block %s not found", hash)
+			}
+			block = rawdb.ReadBlock(chaindb, hash, number)
+			if block == nil {
+				return nil, fmt.Errorf("block %s not found", hash)
+			}
+		}
+	} else {
+		block = rawdb.ReadHeadBlock(chaindb)
+		if block == nil {
+			log.Error("Failed to load head block")
+			return nil, fmt.Errorf("no head block")
+		}
+	}
+	return block, nil
+}
+
 func dumpStateS3(ctx *cli.Context) error {
-	stack, config := makeConfigNode(ctx)
+	stack, _ := makeConfigNode(ctx)
 	defer stack.Close()
 
 	chaindb := utils.MakeChainDatabase(ctx, stack, true)
 	defer chaindb.Close()
 
-	headBlock := rawdb.ReadHeadBlock(chaindb)
-	if headBlock == nil {
-		log.Error("Failed to load head block")
-		return fmt.Errorf("no head block")
+	block, err := parseDumpBlock(chaindb, ctx)
+	if err != nil {
+		return err
 	}
-	log.Info("chainConfig", "ethConfig", fmt.Sprintf("%+v", config.Eth))
+	chainConfig, err := core.ReadGenesis(chaindb)
+	if err != nil {
+		return fmt.Errorf("failed to load genesis block: %w", err)
+	}
 	var (
-		chainId          = config.Eth.Genesis.Config.ChainID.String()
+		chainId          = chainConfig.Config.ChainID.String()
 		region           = ctx.String(utils.S3RegionFlag.Name)
 		nodeXBucket      = ctx.String(utils.S3NodexBucketFlag.Name)
 		chainTableBucket = ctx.String(utils.S3ChainTableBucket.Name)
@@ -740,21 +781,11 @@ func dumpStateS3(ctx *cli.Context) error {
 		version          = ctx.String(utils.PipelineVersionFlag.Name)
 	)
 
-	log.Info("Start dumping snapshot to s3", "block number", headBlock.NumberU64(), "block hash", headBlock.Hash())
+	log.Info("Start dumping snapshot to s3", "block number", block.NumberU64(), "block hash", block.Hash())
 	log.Info("Dumping config", "chainId", chainId, "region", region, "nodeXBucket", nodeXBucket, "chainTableBucket", chainTableBucket, "brokers", brokers, "topic", topic, "version", version)
 	triedb := utils.MakeTrieDatabase(ctx, stack, chaindb, false, true, false)
 	defer triedb.Close()
 
-	snapConfig := snapshot.Config{
-		CacheSize:  256,
-		Recovery:   false,
-		NoBuild:    true,
-		AsyncBuild: false,
-	}
-	snaptree, err := snapshot.New(snapConfig, chaindb, triedb, headBlock.Root())
-	if err != nil {
-		return err
-	}
 	nodeXPusher, err := processor.NewPushProcessor(region, nodeXBucket, brokers, topic, "")
 	if err != nil {
 		return err
@@ -766,7 +797,7 @@ func dumpStateS3(ctx *cli.Context) error {
 	// upload chaintable bucket
 	{
 		blockFile := &ptypes.BlockFile{
-			Block:            util.BuildPipelineBlock(headBlock),
+			Block:            util.BuildPipelineBlock(block),
 			Txs:              make([]ptypes.Transaction, 0),
 			Events:           make([]ptypes.Event, 0),
 			Traces:           make([]ptypes.Trace, 0),
@@ -795,7 +826,7 @@ func dumpStateS3(ctx *cli.Context) error {
 
 	// upload pipeline header
 	{
-		pheader := util.BuildPilelineBlockHeader(headBlock)
+		pheader := util.BuildPilelineBlockHeader(block)
 		s3BlockFile, err := processor.SerializeHeader(chainId, version, pheader)
 		if err != nil {
 			return fmt.Errorf("failed to serialize block header: %v", err)
@@ -806,7 +837,11 @@ func dumpStateS3(ctx *cli.Context) error {
 		}
 	}
 	// dump statediff to s3
-	accIt, err := snaptree.AccountIterator(headBlock.Root(), common.Hash{})
+	stateIt, err := utils.NewStateIterator(triedb, chaindb, block.Root())
+	if err != nil {
+		return err
+	}
+	accIt, err := stateIt.AccountIterator(block.Root(), common.Hash{})
 	if err != nil {
 		return err
 	}
@@ -849,7 +884,7 @@ func dumpStateS3(ctx *cli.Context) error {
 				codeMap[common.BytesToHash(account.CodeHash)] = true
 			}
 		}
-		stIt, err := snaptree.StorageIterator(headBlock.Root(), accIt.Hash(), common.Hash{})
+		stIt, err := stateIt.StorageIterator(block.Root(), accIt.Hash(), common.Hash{})
 		if err != nil {
 			return err
 		}
@@ -857,9 +892,11 @@ func dumpStateS3(ctx *cli.Context) error {
 
 		for stIt.Next() {
 			value := uint256.NewInt(0)
-			if len(stIt.Slot()) > 0 {
-				_, content, _, err := rlp.Split(stIt.Slot())
+			slot := stIt.Slot()
+			if len(slot) > 0 {
+				_, content, _, err := rlp.Split(slot)
 				if err != nil {
+					stIt.Release()
 					log.Error("Failed to split storage", "err", err)
 					return err
 				}
@@ -877,6 +914,11 @@ func dumpStateS3(ctx *cli.Context) error {
 				logged = time.Now()
 			}
 		}
+		if err := stIt.Error(); err != nil {
+			stIt.Release()
+			return err
+		}
+		stIt.Release()
 		if time.Since(logged) > 8*time.Second {
 			log.Info("Snapshot dumping in progress", "at", accIt.Hash(), "accounts", accountCount, "codes", codesCount, "storages", storageCount,
 				"elapsed", common.PrettyDuration(time.Since(start)))
@@ -888,8 +930,11 @@ func dumpStateS3(ctx *cli.Context) error {
 		})
 		accounts = append(accounts, newAccount)
 	}
+	if err := accIt.Error(); err != nil {
+		return err
+	}
 	blockDiff := &ptypes.BlockStorageDiff{
-		Hash:            headBlock.Root(),
+		Hash:            block.Root(),
 		ParentHash:      types.EmptyRootHash,
 		NewAccounts:     accounts,
 		DeletedAccounts: make([]common.Hash, 0),
@@ -912,10 +957,10 @@ func dumpStateS3(ctx *cli.Context) error {
 		ChangeType: 1,
 		NewBlocks: []ptypes.BlockContext{
 			{
-				Hash:        headBlock.Hash(),
-				ParentHash:  headBlock.ParentHash(),
-				BlockNumber: headBlock.NumberU64(),
-				Timestamp:   headBlock.Time(),
+				Hash:        block.Hash(),
+				ParentHash:  block.ParentHash(),
+				BlockNumber: block.NumberU64(),
+				Timestamp:   block.Time(),
 			},
 		},
 	}
