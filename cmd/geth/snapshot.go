@@ -729,6 +729,7 @@ func dumpStateS3(ctx *cli.Context) error {
 		log.Error("Failed to load head block")
 		return fmt.Errorf("no head block")
 	}
+	log.Info("chainConfig", "ethConfig", fmt.Sprintf("%+v", config.Eth))
 	var (
 		chainId          = config.Eth.Genesis.Config.ChainID.String()
 		region           = ctx.String(utils.S3RegionFlag.Name)
