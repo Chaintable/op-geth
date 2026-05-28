@@ -550,6 +550,22 @@ func (a *Alloc) OnAccount(addr *common.Address, account DumpAccount) {
 	}
 }
 
+func DumpStateAlloc(stateDb *StateDB) *Alloc {
+	opts := &DumpConfig{
+		SkipCode:          false,
+		SkipStorage:       false,
+		OnlyWithAddresses: false,
+		Start:             nil,
+		Max:               0,
+		UseStorageKeyHash: true,
+	}
+	genesisAlloc := &Alloc{
+		Accounts: make(map[common.Hash]DumpAccount),
+	}
+	stateDb.DumpToCollector(genesisAlloc, opts)
+	return genesisAlloc
+}
+
 func (a *Alloc) ToStorageDiff(UseStorageKeyHash bool) *ptypes.BlockStorageDiff {
 	diff := &ptypes.BlockStorageDiff{
 		Hash:            a.Root,

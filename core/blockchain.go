@@ -526,7 +526,7 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 					return nil, fmt.Errorf("failed to get genesis state: %w", err)
 				}
 				log.Info("OnGenesisBlock", "number", block.Number)
-				stateDiff := dumpGenesisAlloc(stateDb).ToStorageDiff(true)
+				stateDiff := state.DumpStateAlloc(stateDb).ToStorageDiff(true)
 				bc.logger.OnCeloGenesisBlock(bc.GetBlockByNumber(block.Number.Uint64()), stateDiff)
 			}
 		}

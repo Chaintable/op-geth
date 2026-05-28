@@ -1167,6 +1167,41 @@ Please note that --` + MetricsHTTPFlag.Name + ` must be set to start the server.
 		Value:    metrics.DefaultConfig.InfluxDBOrganization,
 		Category: flags.MetricsCategory,
 	}
+
+	PipelineVersionFlag = &cli.StringFlag{
+		Name:     "pipeline.version",
+		Usage:    "Version of the pipeline to run",
+		Category: flags.EthCategory,
+	}
+	S3RegionFlag = &cli.StringFlag{
+		Name:     "s3.region",
+		Usage:    "AWS region for S3 storage",
+		Category: flags.EthCategory,
+		Value:    "ap-northeast-1",
+	}
+	S3NodexBucketFlag = &cli.StringFlag{
+		Name:     "s3.nodexbucket",
+		Usage:    "S3 bucket name for nodex storage",
+		Category: flags.EthCategory,
+		Value:    "chaintable-nodex-pipeline--apne1-az4--x-s3",
+	}
+	S3ChainTableBucket = &cli.StringFlag{
+		Name:     "s3.chaintablebucket",
+		Usage:    "S3 bucket name for chain table storage",
+		Category: flags.EthCategory,
+		Value:    "chaintable-pipeline--apne1-az4--x-s3",
+	}
+	KafKaBrokersFlag = &cli.StringFlag{
+		Name:     "kafka.brokers",
+		Usage:    "Comma separated list of Kafka brokers to connect to for message publishing",
+		Category: flags.EthCategory,
+		Value:    "b-2.chaintablenodexpi.udy5cj.c4.kafka.ap-northeast-1.amazonaws.com:9092",
+	}
+	KafkaTopicFlag = &cli.StringFlag{
+		Name:     "kafka.topic",
+		Usage:    "Kafka topic to publish messages to",
+		Category: flags.EthCategory,
+	}
 )
 
 var (
@@ -1188,6 +1223,17 @@ var (
 		DBEngineFlag,
 		StateSchemeFlag,
 		HttpHeaderFlag,
+	}
+
+	S3Flags = []cli.Flag{
+		S3RegionFlag,
+		S3NodexBucketFlag,
+		S3ChainTableBucket,
+	}
+
+	KafkaFlags = []cli.Flag{
+		KafKaBrokersFlag,
+		KafkaTopicFlag,
 	}
 )
 
