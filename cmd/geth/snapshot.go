@@ -835,15 +835,15 @@ func dumpStateS3(ctx *cli.Context) error {
 		}
 	}
 	// dump statediff to s3
-	stateIt, err := utils.NewStateIterator(triedb, chaindb, block.Root())
+	stateTrie, err := trie.NewStateTrie(trie.StateTrieID(block.Root()), triedb)
 	if err != nil {
 		return err
 	}
-	accIt, err := stateIt.AccountIterator(block.Root(), common.Hash{})
+	accNodeIt, err := stateTrie.NodeIterator(nil)
 	if err != nil {
 		return err
 	}
-	defer accIt.Release()
+	accIt := trie.NewIterator(accNodeIt)
 
 	var (
 		accounts = make([]ptypes.NewAccount, 0)
@@ -860,12 +860,17 @@ func dumpStateS3(ctx *cli.Context) error {
 	)
 
 	for accIt.Next() {
-		account, err := types.FullAccount(accIt.Account())
-		if err != nil {
+		var account types.StateAccount
+		if err := rlp.DecodeBytes(accIt.Value, &account); err != nil {
+			log.Error("Invalid account encountered during state dump", "err", err)
 			return err
 		}
+		if len(accIt.Key) != common.HashLength {
+			return fmt.Errorf("invalid account trie key length: got %d, want %d", len(accIt.Key), common.HashLength)
+		}
+		accountHash := common.BytesToHash(accIt.Key)
 		newAccount := ptypes.NewAccount{
-			Address:  accIt.Hash(),
+			Address:  accountHash,
 			Balance:  account.Balance,
 			Nonce:    account.Nonce,
 			CodeHash: common.BytesToHash(account.CodeHash),
@@ -882,43 +887,52 @@ func dumpStateS3(ctx *cli.Context) error {
 				codeMap[common.BytesToHash(account.CodeHash)] = true
 			}
 		}
-		stIt, err := stateIt.StorageIterator(block.Root(), accIt.Hash(), common.Hash{})
-		if err != nil {
-			return err
-		}
 		var values = make([]ptypes.IndexValuePair, 0)
+		if account.Root != types.EmptyRootHash {
+			storageTrie, err := trie.NewStateTrie(trie.StorageTrieID(block.Root(), accountHash, account.Root), triedb)
+			if err != nil {
+				log.Error("Failed to open storage trie", "account", accountHash, "root", account.Root, "err", err)
+				return err
+			}
+			storageNodeIt, err := storageTrie.NodeIterator(nil)
+			if err != nil {
+				log.Error("Failed to open storage iterator", "account", accountHash, "root", account.Root, "err", err)
+				return err
+			}
+			storageIt := trie.NewIterator(storageNodeIt)
 
-		for stIt.Next() {
-			value := uint256.NewInt(0)
-			slot := stIt.Slot()
-			if len(slot) > 0 {
-				_, content, _, err := rlp.Split(slot)
-				if err != nil {
-					stIt.Release()
-					log.Error("Failed to split storage", "err", err)
-					return err
+			for storageIt.Next() {
+				value := uint256.NewInt(0)
+				if len(storageIt.Value) > 0 {
+					_, content, _, err := rlp.Split(storageIt.Value)
+					if err != nil {
+						log.Error("Failed to split storage", "err", err)
+						return err
+					}
+					valueHash := common.BytesToHash(content)
+					value = value.SetBytes(valueHash.Bytes())
 				}
-				valueHash := common.BytesToHash(content)
-				value = value.SetBytes(valueHash.Bytes())
+				if len(storageIt.Key) != common.HashLength {
+					return fmt.Errorf("invalid storage trie key length: account %s got %d, want %d", accountHash, len(storageIt.Key), common.HashLength)
+				}
+				values = append(values, ptypes.IndexValuePair{
+					Index: common.BytesToHash(storageIt.Key),
+					Value: value,
+				})
+				storageCount += 1
+				if time.Since(logged) > 8*time.Second {
+					log.Info("Snapshot dumping in progress", "at", accountHash, "accounts", accountCount, "codes", codesCount, "storages", storageCount,
+						"elapsed", common.PrettyDuration(time.Since(start)))
+					logged = time.Now()
+				}
 			}
-			values = append(values, ptypes.IndexValuePair{
-				Index: stIt.Hash(),
-				Value: value,
-			})
-			storageCount += 1
-			if time.Since(logged) > 8*time.Second {
-				log.Info("Snapshot dumping in progress", "at", accIt.Hash(), "accounts", accountCount, "codes", codesCount, "storages", storageCount,
-					"elapsed", common.PrettyDuration(time.Since(start)))
-				logged = time.Now()
+			if storageIt.Err != nil {
+				log.Error("Failed to traverse storage trie", "account", accountHash, "root", account.Root, "err", storageIt.Err)
+				return storageIt.Err
 			}
 		}
-		if err := stIt.Error(); err != nil {
-			stIt.Release()
-			return err
-		}
-		stIt.Release()
 		if time.Since(logged) > 8*time.Second {
-			log.Info("Snapshot dumping in progress", "at", accIt.Hash(), "accounts", accountCount, "codes", codesCount, "storages", storageCount,
+			log.Info("Snapshot dumping in progress", "at", accountHash, "accounts", accountCount, "codes", codesCount, "storages", storageCount,
 				"elapsed", common.PrettyDuration(time.Since(start)))
 			logged = time.Now()
 		}
@@ -928,8 +942,9 @@ func dumpStateS3(ctx *cli.Context) error {
 		})
 		accounts = append(accounts, newAccount)
 	}
-	if err := accIt.Error(); err != nil {
-		return err
+	if accIt.Err != nil {
+		log.Error("Failed to traverse state trie", "root", block.Root(), "err", accIt.Err)
+		return accIt.Err
 	}
 	blockDiff := &ptypes.BlockStorageDiff{
 		Hash:            block.Root(),
