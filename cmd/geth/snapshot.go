@@ -165,6 +165,7 @@ block is used.
 				Action:    dumpStateS3,
 				Flags: slices.Concat([]cli.Flag{
 					utils.PipelineVersionFlag,
+					utils.SnapshotDumpS3ResumeDirFlag,
 				}, utils.NetworkFlags, utils.DatabaseFlags, utils.S3Flags, utils.KafkaFlags),
 				Description: `
 This command is designed to dump the genesis state of a blockchain that has switched clients. Tt uses the snapshots
@@ -779,10 +780,11 @@ func dumpStateS3(ctx *cli.Context) error {
 		brokers          = strings.Split(ctx.String(utils.KafKaBrokersFlag.Name), ",")
 		topic            = ctx.String(utils.KafkaTopicFlag.Name)
 		version          = ctx.String(utils.PipelineVersionFlag.Name)
+		resumeDir        = ctx.String(utils.SnapshotDumpS3ResumeDirFlag.Name)
 	)
 
 	log.Info("Start dumping snapshot to s3", "block number", block.NumberU64(), "block hash", block.Hash())
-	log.Info("Dumping config", "chainId", chainId, "region", region, "nodeXBucket", nodeXBucket, "chainTableBucket", chainTableBucket, "brokers", brokers, "topic", topic, "version", version)
+	log.Info("Dumping config", "chainId", chainId, "region", region, "nodeXBucket", nodeXBucket, "chainTableBucket", chainTableBucket, "brokers", brokers, "topic", topic, "version", version, "resumeDir", resumeDir)
 	triedb := utils.MakeTrieDatabase(ctx, stack, chaindb, false, true, false)
 	defer triedb.Close()
 
@@ -833,6 +835,9 @@ func dumpStateS3(ctx *cli.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to upload block header: %v", err)
 		}
+	}
+	if resumeDir != "" {
+		return dumpStateDiffS3Resumable(chaindb, triedb, block, publisher, chainId, version, resumeDir)
 	}
 	// dump statediff to s3
 	stateTrie, err := trie.NewStateTrie(trie.StateTrieID(block.Root()), triedb)

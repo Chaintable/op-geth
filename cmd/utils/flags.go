@@ -1173,6 +1173,11 @@ Please note that --` + MetricsHTTPFlag.Name + ` must be set to start the server.
 		Usage:    "Version of the pipeline to run",
 		Category: flags.EthCategory,
 	}
+	SnapshotDumpS3ResumeDirFlag = &cli.StringFlag{
+		Name:     "snapshot.dump-s3.resume-dir",
+		Usage:    "Directory for disk-backed resumable snapshot dump-s3 stateDiff files (empty disables)",
+		Category: flags.EthCategory,
+	}
 	S3RegionFlag = &cli.StringFlag{
 		Name:     "s3.region",
 		Usage:    "AWS region for S3 storage",
