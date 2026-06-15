@@ -519,17 +519,6 @@ func NewBlockChain(db ethdb.Database, genesis *Genesis, engine consensus.Engine,
 			}
 			bc.logger.OnGenesisBlock(bc.genesisBlock, alloc)
 		}
-		if chainConfig.ChainID.Uint64() == 42220 {
-			if block := bc.CurrentBlock(); block.Number.Uint64() == 31056500 {
-				stateDb, err := bc.StateAt(block.Root)
-				if err != nil {
-					return nil, fmt.Errorf("failed to get genesis state: %w", err)
-				}
-				log.Info("OnGenesisBlock", "number", block.Number)
-				stateDiff := state.DumpStateAlloc(stateDb).ToStorageDiff(true)
-				bc.logger.OnCeloGenesisBlock(bc.GetBlockByNumber(block.Number.Uint64()), stateDiff)
-			}
-		}
 	}
 	bc.setupSnapshot()
 

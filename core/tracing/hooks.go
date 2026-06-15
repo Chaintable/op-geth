@@ -230,8 +230,7 @@ type Hooks struct {
 	TraceDebitCredit bool
 
 	// custom hook
-	OnCommit           CommitHook
-	OnCeloGenesisBlock CeloGenesisBlockHook
+	OnCommit CommitHook
 }
 
 // BalanceChangeReason is used to indicate the reason for a balance change, useful
