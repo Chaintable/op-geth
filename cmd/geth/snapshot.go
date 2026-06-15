@@ -23,19 +23,27 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
+	"github.com/Chaintable/pipeline/processor"
+	ptypes "github.com/Chaintable/pipeline/types"
+	"github.com/Chaintable/pipeline/util"
 	"github.com/ethereum/go-ethereum/cmd/utils"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/state/pruner"
 	"github.com/ethereum/go-ethereum/core/state/snapshot"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/trie"
+	"github.com/holiman/uint256"
 	"github.com/urfave/cli/v2"
 )
 
@@ -145,6 +153,24 @@ It's also usable without snapshot enabled.
 				Description: `
 This command is semantically equivalent to 'geth dump', but uses the snapshots
 as the backend data source, making this command a lot faster.
+
+The argument is interpreted as block number or hash. If none is provided, the latest
+block is used.
+`,
+			},
+			{
+				Name:      "dump-s3",
+				Usage:     "Dump a specific block from storage (same as 'geth dump' but using snapshots) to s3",
+				ArgsUsage: "[? <blockHash> | <blockNum>]",
+				Action:    dumpStateS3,
+				Flags: slices.Concat([]cli.Flag{
+					utils.PipelineVersionFlag,
+					utils.SnapshotDumpS3ResumeDirFlag,
+				}, utils.NetworkFlags, utils.DatabaseFlags, utils.S3Flags, utils.KafkaFlags),
+				Description: `
+This command is designed to dump the genesis state of a blockchain that has switched clients. Tt uses the snapshots
+as the backend data source, making this command a lot faster.
+It dump data which pipeline tracer required to s3, and send a notice to kafka after dump complete.
 
 The argument is interpreted as block number or hash. If none is provided, the latest
 block is used.
@@ -689,4 +715,272 @@ func checkAccount(ctx *cli.Context) error {
 	}
 	log.Info("Checked the snapshot journalled storage", "time", common.PrettyDuration(time.Since(start)))
 	return nil
+}
+
+func parseDumpBlock(chaindb ethdb.Reader, ctx *cli.Context) (*types.Block, error) {
+	if ctx.NArg() > 1 {
+		return nil, fmt.Errorf("expected 0 or 1 argument (number or hash), got %d", ctx.NArg())
+	}
+	var block *types.Block
+	if ctx.NArg() == 1 {
+		arg := ctx.Args().First()
+		if number, err := strconv.ParseUint(arg, 10, 64); err == nil {
+			hash := rawdb.ReadCanonicalHash(chaindb, number)
+			if hash == (common.Hash{}) {
+				return nil, fmt.Errorf("block %d not found", number)
+			}
+			block = rawdb.ReadBlock(chaindb, hash, number)
+			if block == nil {
+				return nil, fmt.Errorf("block %d (%s) not found", number, hash)
+			}
+		} else {
+			var hash common.Hash
+			if err := hash.UnmarshalText([]byte(arg)); err != nil {
+				return nil, fmt.Errorf("invalid block argument %q: expected block number or hash: %w", arg, err)
+			}
+			number, ok := rawdb.ReadHeaderNumber(chaindb, hash)
+			if !ok {
+				return nil, fmt.Errorf("block %s not found", hash)
+			}
+			block = rawdb.ReadBlock(chaindb, hash, number)
+			if block == nil {
+				return nil, fmt.Errorf("block %s not found", hash)
+			}
+		}
+	} else {
+		block = rawdb.ReadHeadBlock(chaindb)
+		if block == nil {
+			log.Error("Failed to load head block")
+			return nil, fmt.Errorf("no head block")
+		}
+	}
+	return block, nil
+}
+
+func dumpStateS3(ctx *cli.Context) error {
+	stack, _ := makeConfigNode(ctx)
+	defer stack.Close()
+
+	chaindb := utils.MakeChainDatabase(ctx, stack, true)
+	defer chaindb.Close()
+
+	block, err := parseDumpBlock(chaindb, ctx)
+	if err != nil {
+		return err
+	}
+	chainConfig, err := core.ReadGenesis(chaindb)
+	if err != nil {
+		return fmt.Errorf("failed to load genesis block: %w", err)
+	}
+	var (
+		chainId          = chainConfig.Config.ChainID.String()
+		region           = ctx.String(utils.S3RegionFlag.Name)
+		nodeXBucket      = ctx.String(utils.S3NodexBucketFlag.Name)
+		chainTableBucket = ctx.String(utils.S3ChainTableBucket.Name)
+		brokers          = strings.Split(ctx.String(utils.KafKaBrokersFlag.Name), ",")
+		topic            = ctx.String(utils.KafkaTopicFlag.Name)
+		version          = ctx.String(utils.PipelineVersionFlag.Name)
+		resumeDir        = ctx.String(utils.SnapshotDumpS3ResumeDirFlag.Name)
+	)
+
+	log.Info("Start dumping snapshot to s3", "block number", block.NumberU64(), "block hash", block.Hash())
+	log.Info("Dumping config", "chainId", chainId, "region", region, "nodeXBucket", nodeXBucket, "chainTableBucket", chainTableBucket, "brokers", brokers, "topic", topic, "version", version, "resumeDir", resumeDir)
+	triedb := utils.MakeTrieDatabase(ctx, stack, chaindb, false, true, false)
+	defer triedb.Close()
+
+	publisher, err := newSnapshotDumpPublisher(region, nodeXBucket, chainTableBucket, brokers, topic)
+	if err != nil {
+		return err
+	}
+	defer publisher.close()
+
+	// upload chaintable bucket
+	{
+		blockFile := &ptypes.BlockFile{
+			Block:            util.BuildPipelineBlock(block),
+			Txs:              make([]ptypes.Transaction, 0),
+			Events:           make([]ptypes.Event, 0),
+			Traces:           make([]ptypes.Trace, 0),
+			ErrorEvents:      make([]ptypes.Event, 0),
+			ErrorTraces:      make([]ptypes.Trace, 0),
+			StorageContracts: make([]string, 0),
+		}
+		s3BlockFile, err := processor.SerializeFile(chainId, version, blockFile)
+		if err != nil {
+			return fmt.Errorf("failed to serialize block header: %v", err)
+		}
+		err = publisher.uploadChainTable(s3BlockFile)
+		if err != nil {
+			return fmt.Errorf("failed to upload block header: %v", err)
+		}
+
+		blockFileValidation, err := processor.SerializeFileValidation(chainId, version, blockFile)
+		if err != nil {
+			return fmt.Errorf("failed to serialize block file validation: %v", err)
+		}
+		err = publisher.uploadChainTable(blockFileValidation)
+		if err != nil {
+			return fmt.Errorf("failed to upload block file validation: %v", err)
+		}
+	}
+
+	// upload pipeline header
+	{
+		pheader := util.BuildPilelineBlockHeader(block)
+		s3BlockFile, err := processor.SerializeHeader(chainId, version, pheader)
+		if err != nil {
+			return fmt.Errorf("failed to serialize block header: %v", err)
+		}
+		err = publisher.uploadNodeX(s3BlockFile)
+		if err != nil {
+			return fmt.Errorf("failed to upload block header: %v", err)
+		}
+	}
+	if resumeDir != "" {
+		return dumpStateDiffS3Resumable(chaindb, triedb, block, publisher, chainId, version, resumeDir)
+	}
+	// dump statediff to s3
+	stateTrie, err := trie.NewStateTrie(trie.StateTrieID(block.Root()), triedb)
+	if err != nil {
+		return err
+	}
+	accNodeIt, err := stateTrie.NodeIterator(nil)
+	if err != nil {
+		return err
+	}
+	accIt := trie.NewIterator(accNodeIt)
+
+	var (
+		accounts = make([]ptypes.NewAccount, 0)
+		codes    = make([]ptypes.NewCode, 0)
+		storages = make([]ptypes.AccountStorageDiff, 0)
+
+		codeMap = make(map[common.Hash]bool)
+
+		logged       = time.Now()
+		start        = time.Now()
+		accountCount = 0
+		codesCount   = 0
+		storageCount = 0
+	)
+
+	for accIt.Next() {
+		var account types.StateAccount
+		if err := rlp.DecodeBytes(accIt.Value, &account); err != nil {
+			log.Error("Invalid account encountered during state dump", "err", err)
+			return err
+		}
+		if len(accIt.Key) != common.HashLength {
+			return fmt.Errorf("invalid account trie key length: got %d, want %d", len(accIt.Key), common.HashLength)
+		}
+		accountHash := common.BytesToHash(accIt.Key)
+		newAccount := ptypes.NewAccount{
+			Address:  accountHash,
+			Balance:  account.Balance,
+			Nonce:    account.Nonce,
+			CodeHash: common.BytesToHash(account.CodeHash),
+		}
+		accountCount += 1
+		if !bytes.Equal(account.CodeHash, types.EmptyCodeHash.Bytes()) {
+			if _, ok := codeMap[common.BytesToHash(account.CodeHash)]; !ok {
+				code := rawdb.ReadCode(chaindb, common.BytesToHash(account.CodeHash))
+				codes = append(codes, ptypes.NewCode{
+					CodeHash: common.BytesToHash(account.CodeHash),
+					Code:     code,
+				})
+				codesCount += 1
+				codeMap[common.BytesToHash(account.CodeHash)] = true
+			}
+		}
+		var values = make([]ptypes.IndexValuePair, 0)
+		if account.Root != types.EmptyRootHash {
+			storageTrie, err := trie.NewStateTrie(trie.StorageTrieID(block.Root(), accountHash, account.Root), triedb)
+			if err != nil {
+				log.Error("Failed to open storage trie", "account", accountHash, "root", account.Root, "err", err)
+				return err
+			}
+			storageNodeIt, err := storageTrie.NodeIterator(nil)
+			if err != nil {
+				log.Error("Failed to open storage iterator", "account", accountHash, "root", account.Root, "err", err)
+				return err
+			}
+			storageIt := trie.NewIterator(storageNodeIt)
+
+			for storageIt.Next() {
+				value := uint256.NewInt(0)
+				if len(storageIt.Value) > 0 {
+					_, content, _, err := rlp.Split(storageIt.Value)
+					if err != nil {
+						log.Error("Failed to split storage", "err", err)
+						return err
+					}
+					valueHash := common.BytesToHash(content)
+					value = value.SetBytes(valueHash.Bytes())
+				}
+				if len(storageIt.Key) != common.HashLength {
+					return fmt.Errorf("invalid storage trie key length: account %s got %d, want %d", accountHash, len(storageIt.Key), common.HashLength)
+				}
+				values = append(values, ptypes.IndexValuePair{
+					Index: common.BytesToHash(storageIt.Key),
+					Value: value,
+				})
+				storageCount += 1
+				if time.Since(logged) > 8*time.Second {
+					log.Info("Snapshot dumping in progress", "at", accountHash, "accounts", accountCount, "codes", codesCount, "storages", storageCount,
+						"elapsed", common.PrettyDuration(time.Since(start)))
+					logged = time.Now()
+				}
+			}
+			if storageIt.Err != nil {
+				log.Error("Failed to traverse storage trie", "account", accountHash, "root", account.Root, "err", storageIt.Err)
+				return storageIt.Err
+			}
+		}
+		if time.Since(logged) > 8*time.Second {
+			log.Info("Snapshot dumping in progress", "at", accountHash, "accounts", accountCount, "codes", codesCount, "storages", storageCount,
+				"elapsed", common.PrettyDuration(time.Since(start)))
+			logged = time.Now()
+		}
+		storages = append(storages, ptypes.AccountStorageDiff{
+			Address: newAccount.Address,
+			Values:  values,
+		})
+		accounts = append(accounts, newAccount)
+	}
+	if accIt.Err != nil {
+		log.Error("Failed to traverse state trie", "root", block.Root(), "err", accIt.Err)
+		return accIt.Err
+	}
+	blockDiff := &ptypes.BlockStorageDiff{
+		Hash:            block.Root(),
+		ParentHash:      types.EmptyRootHash,
+		NewAccounts:     accounts,
+		DeletedAccounts: make([]common.Hash, 0),
+		StorageDiff:     storages,
+		NewCodes:        codes,
+	}
+
+	{
+		s3BlockFile, err := processor.SerializeStateDiff(chainId, version, blockDiff)
+		if err != nil {
+			return fmt.Errorf("failed to serialize block header: %v", err)
+		}
+		err = publisher.uploadNodeX(s3BlockFile)
+		if err != nil {
+			return fmt.Errorf("failed to upload block header: %v", err)
+		}
+	}
+
+	blockChanges := &ptypes.BlockChangeNotification{
+		ChangeType: 1,
+		NewBlocks: []ptypes.BlockContext{
+			{
+				Hash:        block.Hash(),
+				ParentHash:  block.ParentHash(),
+				BlockNumber: block.NumberU64(),
+				Timestamp:   block.Time(),
+			},
+		},
+	}
+	return publisher.pushBlockChangeNotification(blockChanges)
 }
