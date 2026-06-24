@@ -38,14 +38,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Generate app token
-        id: generate-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.RELEASE_MANAGER_APP_ID }}
-          private-key: ${{ secrets.RELEASE_MANAGER_APP_SECRET }}
-          owner: ${{ github.repository_owner }}
-
       - name: Set env
         run: |
           echo "REVISION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
@@ -72,7 +64,6 @@ jobs:
           context: .
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ matrix.arch }}-${{ env.REVISION }}
-          build-args: ACCESS_TOKEN=${{ steps.generate-token.outputs.token }}
           provenance: false
 
   merge-docker-manifest:
