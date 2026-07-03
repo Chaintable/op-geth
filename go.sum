@@ -12,8 +12,8 @@ github.com/AzureAD/microsoft-authentication-library-for-go v1.0.0 h1:OBhqkivkhkM
 github.com/AzureAD/microsoft-authentication-library-for-go v1.0.0/go.mod h1:kgDmCTgBzIEPFElEF+FK0SdjAor06dRq2Go927dnQ6o=
 github.com/BurntSushi/toml v1.4.0 h1:kuoIxZQy2WRRk1pttg9asf+WVv6tWQuBNVmK8+nqPr0=
 github.com/BurntSushi/toml v1.4.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
-github.com/Chaintable/pipeline v0.0.62-op-v1.101603.5 h1:3Oq/kBhbwTpAMEfxTgIntZSqdMyZFkkZ+BebKh/ABHQ=
-github.com/Chaintable/pipeline v0.0.62-op-v1.101603.5/go.mod h1:tvtbKNjz4yOynQZoVoB5EMH3gCx6HOWOe7IjPLLqvPI=
+github.com/Chaintable/pipeline v0.0.62-op-v1.101603.5.0.20260703020834-560f4178874c h1:K9VSLLqTjxs5tjTBcyoIk/bZ+sYI+rmFxtoh7sKhza0=
+github.com/Chaintable/pipeline v0.0.62-op-v1.101603.5.0.20260703020834-560f4178874c/go.mod h1:tvtbKNjz4yOynQZoVoB5EMH3gCx6HOWOe7IjPLLqvPI=
 github.com/DataDog/zstd v1.4.5 h1:EndNeuB0l9syBZhut0wns3gV1hL8zX8LIu6ZiVHWLIQ=
 github.com/DataDog/zstd v1.4.5/go.mod h1:1jcaCB/ufaK+sKp1NBhlGmpz41jOoPQ35bpF36t7BBo=
 github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERoyfY=
