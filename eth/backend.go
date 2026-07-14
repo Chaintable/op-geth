@@ -463,6 +463,9 @@ func (s *Ethereum) APIs() []rpc.API {
 		}, {
 			Namespace: "trace",
 			Service:   NewDebankAPI(s),
+		}, {
+			Namespace: "debank",
+			Service:   NewDebankRpcAPI(s),
 		},
 	}...)
 }
