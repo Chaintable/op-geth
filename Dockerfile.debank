@@ -1,0 +1,22 @@
+# builder image
+FROM golang:1.24.2 as builder
+
+WORKDIR /go-ethereum
+
+COPY . .
+
+RUN go mod download && make geth
+
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install -y ca-certificates wget libsnappy-dev libjemalloc-dev
+RUN update-ca-certificates
+
+WORKDIR /app
+
+COPY --from=builder /go-ethereum/build/bin /app
+
+
+EXPOSE 8545 8546 30303 30303/udp
+
+ENTRYPOINT ["/app/geth"]
