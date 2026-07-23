@@ -53,10 +53,11 @@ func GetLastBlockNotice(reader *kafka.Reader) (*types.BlockChangeNotification, e
 
 func NewKafkaWriter(brokers []string, topic string) *kafka.Writer {
 	return &kafka.Writer{
-		Addr:         kafka.TCP(brokers...),
-		Topic:        topic,
-		Balancer:     &kafka.Hash{},
-		RequiredAcks: kafka.RequireOne,
+		Addr:                   kafka.TCP(brokers...),
+		Topic:                  topic,
+		Balancer:               &kafka.Hash{},
+		RequiredAcks:           kafka.RequireAll,
+		AllowAutoTopicCreation: false,
 		// 默认100个，或者等待1s才发生
 		BatchBytes: 1024 * 1024 * 10,
 		BatchSize:  1,
