@@ -145,13 +145,9 @@ func TestNoTxPoolPayloadReusesExecutionResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to build payload: %v", err)
 	}
-	envelope := payload.ResolveFull()
-	if envelope == nil {
-		t.Fatal("ExecutionPayloadEnvelope is nil")
-	}
-	block, err := engine.ExecutableDataToBlock(*envelope.ExecutionPayload, nil, envelope.ParentBeaconBlockRoot)
-	if err != nil {
-		t.Fatalf("Failed to reconstruct payload block: %v", err)
+	block := payload.GetBlock()
+	if block == nil {
+		t.Fatal("Payload block is nil")
 	}
 
 	// Attach the tracer only after payload construction. A cache miss in
