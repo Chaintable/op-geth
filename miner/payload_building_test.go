@@ -27,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/eth/tracers/logger"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -117,6 +118,51 @@ func testBuildPayload(t *testing.T, noTxPool, interrupt bool) {
 	dataTwo := payload.Resolve()
 	if !reflect.DeepEqual(dataOne, dataTwo) {
 		t.Fatal("Unexpected payload data")
+	}
+}
+
+func TestNoTxPoolPayloadReusesExecutionResult(t *testing.T) {
+	var (
+		db        = rawdb.NewMemoryDatabase()
+		recipient = common.HexToAddress("0xdeadbeef")
+	)
+	w, b := newTestWorker(t, params.TestChainConfig, ethash.NewFaker(), db, 0, nil, nil)
+	defer w.close()
+
+	tx := types.MustSignNewTx(testBankKey, types.LatestSigner(params.TestChainConfig), &types.LegacyTx{
+		Nonce:    0,
+		Gas:      testGas,
+		GasPrice: big.NewInt(params.InitialBaseFee),
+		Data:     common.FromHex(testCode),
+	})
+	payload, err := w.buildPayload(&BuildPayloadArgs{
+		Parent:       b.chain.CurrentBlock().Hash(),
+		Timestamp:    uint64(time.Now().Unix()),
+		FeeRecipient: recipient,
+		NoTxPool:     true,
+		Transactions: types.Transactions{tx},
+	})
+	if err != nil {
+		t.Fatalf("Failed to build payload: %v", err)
+	}
+	block := payload.GetBlock()
+	if block == nil {
+		t.Fatal("Payload block is nil")
+	}
+
+	// Attach the tracer only after payload construction. A cache miss in
+	// InsertBlockWithoutSetHead would re-execute the contract-creation transaction
+	// and therefore produce opcode logs.
+	tracer := logger.NewStructLogger(nil)
+	b.chain.GetVMConfig().Tracer = tracer
+	if err := b.chain.InsertBlockWithoutSetHead(block); err != nil {
+		t.Fatalf("Failed to insert cached payload: %v", err)
+	}
+	if logs := tracer.StructLogs(); len(logs) != 0 {
+		t.Fatalf("Payload was re-executed during insertion: got %d opcode logs", len(logs))
+	}
+	if !b.chain.HasState(block.Root()) {
+		t.Fatalf("State for inserted payload %s was not committed", block.Hash())
 	}
 }
 

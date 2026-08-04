@@ -321,6 +321,7 @@ func (w *worker) buildPayload(args *BuildPayloadArgs) (*Payload, error) {
 			return nil, empty.err
 		}
 		log.Info("Built empty payload succeed", "id", args.Id(), "number", empty.block.NumberU64(), "hash", empty.block.Hash(), "elapsed", common.PrettyDuration(time.Since(start)))
+		w.cacheMiningBlock(empty.block, empty.env)
 
 		payload := newPayload(empty.block, args.Id())
 		// make sure to make it appear as full, otherwise it will wait indefinitely for payload building to complete.
