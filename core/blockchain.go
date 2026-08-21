@@ -1799,7 +1799,7 @@ func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types
 		}
 
 		if blockChange != nil {
-			err := tracer.NodeXPusher.PushBlockChangeNotification(blockChange)
+			err := tracer.NodeXPusher.PushBlockChangeNotification(blockChange, nil)
 			if err != nil {
 				log.Error("SetCanonical PushBlockChangeNotification error", "err", err)
 			}
@@ -2752,7 +2752,7 @@ func (bc *BlockChain) SetCanonical(head *types.Block) (common.Hash, error) {
 		}
 
 		if blockChange != nil {
-			err := tracer.NodeXPusher.PushBlockChangeNotification(blockChange)
+			err := tracer.NodeXPusher.PushBlockChangeNotification(blockChange, nil)
 			if err != nil {
 				log.Error("SetCanonical PushBlockChangeNotification error", "err", err)
 			}
