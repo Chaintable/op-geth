@@ -23,6 +23,7 @@ type PushProcessor struct {
 	Bucket          string
 	Uploader        *s3.Client
 	KafkaWriter     *kafka.Writer
+	noticeMu        sync.RWMutex
 	LastBlockNotice *types.BlockChangeNotification
 	S3TempDir       string
 	quitCh          chan struct{}
@@ -66,9 +67,9 @@ func (p *PushProcessor) UpdateLastBlock() error {
 	}
 	log.Printf("update last block notice: %+v\n", lastBlockNotice)
 
-	// Simply update the last block notice without locking
-	// The locking should be handled at a higher level if needed
+	p.noticeMu.Lock()
 	p.LastBlockNotice = lastBlockNotice
+	p.noticeMu.Unlock()
 	return nil
 }
 
@@ -235,6 +236,8 @@ func (p *PushProcessor) UploadFilesToS3(files []*DataFile) error {
 }
 
 func (p *PushProcessor) LastPushedBlock() *types.BlockContext {
+	p.noticeMu.RLock()
+	defer p.noticeMu.RUnlock()
 	if p.LastBlockNotice == nil {
 		return nil
 	}
@@ -252,8 +255,8 @@ func (p *PushProcessor) PushBlockChangeNotification(blockNotice *types.BlockChan
 			return nil
 		}
 	} else {
-		// backup in etcd-based failover mode
-		if !leader.GlobalManager.LeaderFailover.IsLeaderNode {
+		// Use IsLeaderLocked since we already hold LeaderMutex.Lock()
+		if !leader.GlobalManager.IsLeaderLocked() {
 			log.Printf("backup in etcd node, skip push block change notification\n")
 			return nil
 		}
