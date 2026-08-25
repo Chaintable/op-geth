@@ -1,55 +1,103 @@
 name: "Release new artifacts"
 
+# dbk line: self-hosted runners were decommissioned (last pickup 2026-05, debank-20),
+# so this mirrors main's release.yml — GitHub-hosted runner, OIDC role, public ECR.
+# Only the dbk-writer alias is produced; `latest` is intentionally not touched so
+# the old v1.101315.1 line never overrides main's op-geth:latest / dbk-writer:latest.
+
 on:
   release:
     types:
       - created
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
-  AWS_REGION: ap-northeast-1
-  REGISTRY: 294354037686.dkr.ecr.ap-northeast-1.amazonaws.com
-  IMAGE: blockchain-op-gethx
+  AWS_REGION: us-east-1
+  REGISTRY: public.ecr.aws/b2h7a5c4/chaintable
+  IMAGE: op-geth
   DOCKERFILE: Dockerfile.debank
+  CHAINS: "dbk"
 
 jobs:
   build-artifacts:
     strategy:
+      fail-fast: false
       matrix:
-        arch: [amd64]
-    runs-on: [self-hosted, "${{ matrix.arch }}"]
+        include:
+          - runner: ubuntu2404-linux-x86-64-16c
+            arch: amd64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
     steps:
-      - name: Install Go
-        uses: actions/setup-go@v2
-        with:
-          go-version: 1.21.x
-
       - name: Checkout code
         uses: actions/checkout@v2
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
-      - uses: tibdex/github-app-token@v1
-        id: generate-token
-        with:
-          app_id: ${{ secrets.RELEASE_MANAGER_APP_ID }}
-          private_key: ${{ secrets.RELEASE_MANAGER_APP_SECRET }}
-
       - name: Set env
         run: |
           echo "REVISION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
 
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Build image and push to ECR
-        uses:  docker/build-push-action@v5
+        uses: docker/build-push-action@v5
         with:
           file: ${{ env.DOCKERFILE }}
           context: .
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ matrix.arch }}-${{ env.REVISION }}
-          build-args: ACCESS_TOKEN=${{ steps.generate-token.outputs.token }}
           provenance: false
 
+  alias-writer:
+    runs-on: ubuntu2404-linux-x86-64-16c
+    needs: build-artifacts
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Set env
+        run: |
+          echo "REVISION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Alias per-chain writers
+        run: |
+          # un-prefixed tag (amd64 only) + per-chain writer alias, no `latest`
+          docker buildx imagetools create --tag ${REGISTRY}/${IMAGE}:${REVISION} ${REGISTRY}/${IMAGE}:amd64-${REVISION}
+          for c in ${CHAINS}; do
+            docker buildx imagetools create --tag ${REGISTRY}/${c}-writer:${REVISION} ${REGISTRY}/${IMAGE}:${REVISION}
+          done
