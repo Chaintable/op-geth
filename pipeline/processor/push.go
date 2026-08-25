@@ -29,6 +29,9 @@ type PushProcessor struct {
 	S3DataCh        chan *DataFile
 	Brokers         []string
 	Topic           string
+	bcReader        BlockchainReader // for reorg computation
+	noticeMu        sync.RWMutex     // protects LastBlockNotice
+	commitMu        sync.Mutex       // serializes NotifyBlockCommit calls
 }
 
 func NewPushProcessor(region string, bucket string, brokers []string, topic string, s3TempDir string) (*PushProcessor, error) {
@@ -66,9 +69,9 @@ func (p *PushProcessor) UpdateLastBlock() error {
 	}
 	log.Printf("update last block notice: %+v\n", lastBlockNotice)
 
-	// Simply update the last block notice without locking
-	// The locking should be handled at a higher level if needed
+	p.noticeMu.Lock()
 	p.LastBlockNotice = lastBlockNotice
+	p.noticeMu.Unlock()
 	return nil
 }
 
@@ -235,6 +238,9 @@ func (p *PushProcessor) UploadFilesToS3(files []*DataFile) error {
 }
 
 func (p *PushProcessor) LastPushedBlock() *types.BlockContext {
+	p.noticeMu.RLock()
+	defer p.noticeMu.RUnlock()
+
 	if p.LastBlockNotice == nil {
 		return nil
 	}
@@ -319,7 +325,9 @@ func (p *PushProcessor) PushBlockChangeNotification(blockNotice *types.BlockChan
 	}
 
 	// 更新最新的区块通知
+	p.noticeMu.Lock()
 	p.LastBlockNotice = blockNotice
+	p.noticeMu.Unlock()
 	metrics.LatestBlockNumber.Update(int64(blockNotice.NewBlocks[len(blockNotice.NewBlocks)-1].BlockNumber))
 	metrics.LatestBlockTime.Update(int64(blockNotice.NewBlocks[len(blockNotice.NewBlocks)-1].Timestamp))
 	return nil
@@ -328,4 +336,139 @@ func (p *PushProcessor) PushBlockChangeNotification(blockNotice *types.BlockChan
 func (p *PushProcessor) Close() {
 	p.KafkaWriter.Close()
 	close(p.quitCh)
+}
+
+// SetBlockchainReader sets the blockchain reader for reorg computation.
+func (p *PushProcessor) SetBlockchainReader(reader BlockchainReader) {
+	p.bcReader = reader
+}
+
+// NotifyBlockCommit is called when a new block is committed to the canonical chain.
+// It computes reorg if needed and pushes block change notification to Kafka.
+func (p *PushProcessor) NotifyBlockCommit(newBlock types.BlockContext) error {
+	// Serialize all NotifyBlockCommit calls to avoid concurrent reorg computation
+	p.commitMu.Lock()
+	defer p.commitMu.Unlock()
+
+	// Check leadership early to avoid wasted computation on backup nodes
+	if !leader.GlobalManager.IsLeader() {
+		return nil
+	}
+
+	// Get last pushed block under notice mutex
+	p.noticeMu.RLock()
+	lastPushedBlock := p.LastBlockNotice
+	p.noticeMu.RUnlock()
+
+	if lastPushedBlock == nil {
+		// No previous block, this is the first push
+		blockNotice := &types.BlockChangeNotification{
+			ChangeType: 1, // new blocks
+			NewBlocks:  []types.BlockContext{newBlock},
+		}
+		return p.PushBlockChangeNotification(blockNotice)
+	}
+
+	lastBlock := lastPushedBlock.NewBlocks[len(lastPushedBlock.NewBlocks)-1]
+
+	// Check if this block extends the chain
+	if lastBlock.BlockNumber >= newBlock.BlockNumber {
+		// Block number not advancing, skip (likely unwind or same block)
+		return nil
+	}
+
+	// Compute common ancestor and reorg
+	_, dropBlocks, newBlocks := p.getCommonAncestor(lastBlock, newBlock)
+
+	var blockNotice *types.BlockChangeNotification
+	if len(dropBlocks) > 0 {
+		// Reorg detected
+		blockNotice = &types.BlockChangeNotification{
+			ChangeType: 2, // reorg
+			NewBlocks:  newBlocks,
+			DropBlocks: dropBlocks,
+		}
+	} else if len(newBlocks) > 0 {
+		// Normal extension
+		blockNotice = &types.BlockChangeNotification{
+			ChangeType: 1, // new blocks
+			NewBlocks:  newBlocks,
+		}
+	}
+
+	if blockNotice != nil {
+		return p.PushBlockChangeNotification(blockNotice)
+	}
+	return nil
+}
+
+// getCommonAncestor finds the common ancestor between two blocks and returns
+// the ancestor, blocks to drop (from chain A), and blocks to add (from chain B).
+func (p *PushProcessor) getCommonAncestor(blockA, blockB types.BlockContext) (types.BlockContext, []types.BlockContext, []types.BlockContext) {
+	if p.bcReader == nil {
+		log.Printf("WARNING: BlockchainReader not set, cannot compute reorg")
+		return blockA, nil, []types.BlockContext{blockB}
+	}
+
+	var chainA, chainB []types.BlockContext
+
+	// Quick check: if blockB extends blockA directly
+	if blockB.ParentHash == blockA.Hash {
+		return blockA, chainA, []types.BlockContext{blockB}
+	}
+
+	// Walk back blockB to same height as blockA
+	for blockB.BlockNumber > blockA.BlockNumber {
+		chainB = append(chainB, blockB)
+		header := p.bcReader.GetHeaderByHash(blockB.ParentHash)
+		if header == nil {
+			log.Printf("ERROR: Failed to get header by hash %s", blockB.ParentHash.Hex())
+			return blockA, nil, []types.BlockContext{blockB}
+		}
+		blockB = types.BlockContext{
+			BlockNumber: header.Number(),
+			Hash:        header.Hash(),
+			ParentHash:  header.ParentHash(),
+			Timestamp:   header.Time(),
+		}
+	}
+
+	// Walk back both chains until we find common ancestor
+	for blockA.Hash != blockB.Hash {
+		chainA = append(chainA, blockA)
+		headerA := p.bcReader.GetHeaderByHash(blockA.ParentHash)
+		if headerA == nil {
+			log.Printf("ERROR: Failed to get header by hash %s", blockA.ParentHash.Hex())
+			return blockA, nil, chainB
+		}
+		blockA = types.BlockContext{
+			BlockNumber: headerA.Number(),
+			Hash:        headerA.Hash(),
+			ParentHash:  headerA.ParentHash(),
+			Timestamp:   headerA.Time(),
+		}
+
+		chainB = append(chainB, blockB)
+		headerB := p.bcReader.GetHeaderByHash(blockB.ParentHash)
+		if headerB == nil {
+			log.Printf("ERROR: Failed to get header by hash %s", blockB.ParentHash.Hex())
+			return blockA, chainA, nil
+		}
+		blockB = types.BlockContext{
+			BlockNumber: headerB.Number(),
+			Hash:        headerB.Hash(),
+			ParentHash:  headerB.ParentHash(),
+			Timestamp:   headerB.Time(),
+		}
+	}
+
+	// Reverse both chains to get correct order
+	for i, j := 0, len(chainA)-1; i < j; i, j = i+1, j-1 {
+		chainA[i], chainA[j] = chainA[j], chainA[i]
+	}
+	for i, j := 0, len(chainB)-1; i < j; i, j = i+1, j-1 {
+		chainB[i], chainB[j] = chainB[j], chainB[i]
+	}
+
+	return blockA, chainA, chainB
 }

@@ -50,6 +50,7 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/pipeline/leader"
+	"github.com/ethereum/go-ethereum/pipeline/processor"
 	"github.com/ethereum/go-ethereum/pipeline/tracer"
 	ptypes "github.com/ethereum/go-ethereum/pipeline/types"
 	"github.com/ethereum/go-ethereum/pipeline/util"
@@ -504,6 +505,12 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 	if txLookupLimit != nil {
 		bc.txIndexer = newTxIndexer(*txLookupLimit, bc)
 	}
+
+	// Set up blockchain reader for pipeline processor
+	if tracer.NodeXPusher != nil {
+		tracer.NodeXPusher.SetBlockchainReader(&blockchainReaderAdapter{bc: bc})
+	}
+
 	return bc, nil
 }
 
@@ -1522,47 +1529,21 @@ func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types
 			bc.chainHeadFeed.Send(ChainHeadEvent{Block: block})
 		}
 
-		// 先确保 pipeline tracer 不为空，然后再判断是否需要push kafka
-		// 上一个push kafka的block, 必然存在(至少有genesis block)
-		// 上一个push kafka的block比当前的head block还要新，说明有unwind回退，不需要处理, 即使是fork，等有更新的block的时候再一起push
-		isLeader := leader.GlobalManager.IsLeader()
-		leader.GlobalManager.RLock()
-		lastPushedBlock := tracer.NodeXPusher.LastPushedBlock()
-		leader.GlobalManager.RUnlock()
+		// Notify pipeline processor about new canonical block
+		if tracer.NodeXPusher != nil {
+			parent := bc.GetHeaderByHash(block.Header().ParentHash)
+			if parent != nil && parent.Root == block.Root() {
+				bc.hooks.OnCommit(parent.Root, block.Root(), nil, nil, nil, nil, nil, nil)
+			}
 
-		if tracer.NodeXPusher != nil && isLeader && lastPushedBlock.BlockNumber <= block.NumberU64() {
-			_, dropBlocks, newBlocks := bc.getCommonAncestor(*lastPushedBlock, ptypes.BlockContext{
+			err := tracer.NodeXPusher.NotifyBlockCommit(ptypes.BlockContext{
 				BlockNumber: block.NumberU64(),
 				Hash:        block.Hash(),
 				ParentHash:  block.ParentHash(),
 				Timestamp:   block.Time(),
 			})
-			var blockChange *ptypes.BlockChangeNotification
-			if len(dropBlocks) > 0 {
-				blockChange = &ptypes.BlockChangeNotification{
-					ChangeType: 2,
-					NewBlocks:  newBlocks,
-					DropBlocks: dropBlocks,
-				}
-			} else if len(newBlocks) > 0 {
-				blockChange = &ptypes.BlockChangeNotification{
-					ChangeType: 1,
-					NewBlocks:  newBlocks,
-				}
-			}
-
-			parent := bc.GetHeaderByHash(block.Header().ParentHash)
-
-			if parent.Root == block.Root() {
-				bc.hooks.OnCommit(parent.Root, block.Root(), nil, nil, nil, nil, nil, nil)
-			}
-
-			if blockChange != nil {
-				err := tracer.NodeXPusher.PushBlockChangeNotification(blockChange)
-				if err != nil {
-					log.Error("SetCanonical PushBlockChangeNotification error", "err", err)
-				}
-				log.Info("NodeXPusher PushBlockChangeNotification", "blockChange", blockChange)
+			if err != nil {
+				log.Error("writeBlockAndSetHead NotifyBlockCommit error", "err", err)
 			}
 		}
 	} else {
@@ -2405,52 +2386,22 @@ func (bc *BlockChain) SetCanonical(head *types.Block) (common.Hash, error) {
 	}
 	bc.writeHeadBlock(head)
 
-	// 先确保 pipeline tracer 不为空，然后再判断是否需要push kafka
-	// 上一个push kafka的block, 必然存在(至少有genesis block)
-	// 上一个push kafka的block比当前的head block还要新，说明有unwind回退，不需要处理, 即使是fork，等有更新的block的时候再一起push
-	isLeader := leader.GlobalManager.IsLeader()
-	leader.GlobalManager.RLock()
-	lastPushedBlock := tracer.NodeXPusher.LastPushedBlock()
-	leader.GlobalManager.RUnlock()
+	// Notify pipeline processor about new canonical block
+	if tracer.NodeXPusher != nil {
+		parent := bc.GetHeaderByHash(head.Header().ParentHash)
+		if parent != nil && parent.Root == head.Root() {
+			bc.hooks.OnCommit(parent.Root, head.Root(), nil, nil, nil, nil, nil, nil)
+		}
 
-	if tracer.NodeXPusher != nil && isLeader && lastPushedBlock.BlockNumber <= head.NumberU64() {
-		_, dropBlocks, newBlocks := bc.getCommonAncestor(*lastPushedBlock, ptypes.BlockContext{
+		err := tracer.NodeXPusher.NotifyBlockCommit(ptypes.BlockContext{
 			BlockNumber: head.NumberU64(),
 			Hash:        head.Hash(),
 			ParentHash:  head.ParentHash(),
 			Timestamp:   head.Time(),
 		})
-		var blockChange *ptypes.BlockChangeNotification
-		if len(dropBlocks) > 0 {
-			blockChange = &ptypes.BlockChangeNotification{
-				ChangeType: 2,
-				NewBlocks:  newBlocks,
-				DropBlocks: dropBlocks,
-			}
-		} else if len(newBlocks) > 0 {
-			blockChange = &ptypes.BlockChangeNotification{
-				ChangeType: 1,
-				NewBlocks:  newBlocks,
-			}
+		if err != nil {
+			log.Error("SetCanonical NotifyBlockCommit error", "err", err)
 		}
-
-		parent := bc.GetHeaderByHash(head.Header().ParentHash)
-
-		if parent.Root == head.Root() {
-			bc.hooks.OnCommit(parent.Root, head.Root(), nil, nil, nil, nil, nil, nil)
-		}
-
-		if blockChange != nil {
-			err := tracer.NodeXPusher.PushBlockChangeNotification(blockChange)
-			if err != nil {
-				log.Error("SetCanonical PushBlockChangeNotification error", "err", err)
-			}
-			log.Info("NodeXPusher PushBlockChangeNotification", "blockChange", blockChange)
-		}
-
-		log.Debug("SetCanonical New BlockChangeNotification")
-	} else {
-		log.Debug("SetCanonical NodeXPusher is nil or LastBlockNotice.NewBlocks[0].BlockNumber <= block.NumberU64()")
 	}
 
 	// Emit events
@@ -2617,60 +2568,24 @@ func (bc *BlockChain) GetHeaderByHash2(blockHash common.Hash) *types.Header {
 	return header
 }
 
-// 返回两个块的共同祖先，以及两个块的从共同祖先到两个块的路径,即drop和new
-func (bc *BlockChain) getCommonAncestor(blocka ptypes.BlockContext, blockb ptypes.BlockContext) (ptypes.BlockContext, []ptypes.BlockContext, []ptypes.BlockContext) {
-	var (
-		chainA, chainB []ptypes.BlockContext
-	)
-	if blockb.ParentHash == blocka.Hash {
-		return blocka, chainA, []ptypes.BlockContext{blockb}
-	}
-	for blockb.BlockNumber > blocka.BlockNumber {
-		chainB = append(chainB, blockb)
-		headerb := bc.GetHeaderByHash2(blockb.ParentHash)
-		if headerb == nil {
-			log.Crit("Failed to get header by hash", "hash", blockb.ParentHash)
-		} else {
-			blockb = ptypes.BlockContext{
-				BlockNumber: headerb.Number.Uint64(),
-				Hash:        headerb.Hash(),
-				ParentHash:  headerb.ParentHash,
-				Timestamp:   headerb.Time,
-			}
-		}
-	}
-	for blocka.Hash != blockb.Hash {
-		chainA = append(chainA, blocka)
-		headera := bc.GetHeaderByHash2(blocka.ParentHash)
-		if headera == nil {
-			log.Crit("Failed to get header by hash", "hash", blocka.ParentHash)
-		} else {
-			blocka = ptypes.BlockContext{
-				BlockNumber: headera.Number.Uint64(),
-				Hash:        headera.Hash(),
-				ParentHash:  headera.ParentHash,
-				Timestamp:   headera.Time,
-			}
-		}
-
-		chainB = append(chainB, blockb)
-		headerb := bc.GetHeaderByHash2(blockb.ParentHash)
-		if headerb == nil {
-			log.Crit("Failed to get header by hash", "hash", blockb.ParentHash)
-		} else {
-			blockb = ptypes.BlockContext{
-				BlockNumber: headerb.Number.Uint64(),
-				Hash:        headerb.Hash(),
-				ParentHash:  headerb.ParentHash,
-				Timestamp:   headerb.Time,
-			}
-		}
-	}
-	// now blocka == blockb == ancestor
-
-	// reverse chainA
-	slices.Reverse(chainA)
-	// reverse chainB
-	slices.Reverse(chainB)
-	return blocka, chainA, chainB
+// blockchainReaderAdapter adapts BlockChain to pipeline's BlockchainReader interface
+type blockchainReaderAdapter struct {
+	bc *BlockChain
 }
+
+func (a *blockchainReaderAdapter) GetHeaderByHash(hash common.Hash) processor.Header {
+	header := a.bc.GetHeaderByHash(hash)
+	if header == nil {
+		return nil
+	}
+	return &headerAdapter{header}
+}
+
+type headerAdapter struct {
+	h *types.Header
+}
+
+func (h *headerAdapter) Number() uint64          { return h.h.Number.Uint64() }
+func (h *headerAdapter) Hash() common.Hash       { return h.h.Hash() }
+func (h *headerAdapter) ParentHash() common.Hash { return h.h.ParentHash }
+func (h *headerAdapter) Time() uint64            { return h.h.Time }
