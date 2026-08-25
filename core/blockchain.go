@@ -49,7 +49,6 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/ethereum/go-ethereum/pipeline/leader"
 	"github.com/ethereum/go-ethereum/pipeline/processor"
 	"github.com/ethereum/go-ethereum/pipeline/tracer"
 	ptypes "github.com/ethereum/go-ethereum/pipeline/types"

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/pipeline/leader"
 	"github.com/ethereum/go-ethereum/pipeline/metrics"
 
@@ -377,55 +378,16 @@ func (p *PushProcessor) NotifyBlockCommit(newBlock types.BlockContext) error {
 		return nil
 	}
 
-	// Compute common ancestor and reorg
-	_, dropBlocks, newBlocks := p.getCommonAncestor(lastBlock, newBlock)
-
-	var blockNotice *types.BlockChangeNotification
-	if len(dropBlocks) > 0 {
-		// Reorg detected
-		blockNotice = &types.BlockChangeNotification{
-			ChangeType: 2, // reorg
-			NewBlocks:  newBlocks,
-			DropBlocks: dropBlocks,
+	// Compute common ancestor and reorg using utility function
+	fetcher := func(hash common.Hash) *types.BlockContext {
+		if p.bcReader == nil {
+			return nil
 		}
-	} else if len(newBlocks) > 0 {
-		// Normal extension
-		blockNotice = &types.BlockChangeNotification{
-			ChangeType: 1, // new blocks
-			NewBlocks:  newBlocks,
-		}
-	}
-
-	if blockNotice != nil {
-		return p.PushBlockChangeNotification(blockNotice)
-	}
-	return nil
-}
-
-// getCommonAncestor finds the common ancestor between two blocks and returns
-// the ancestor, blocks to drop (from chain A), and blocks to add (from chain B).
-func (p *PushProcessor) getCommonAncestor(blockA, blockB types.BlockContext) (types.BlockContext, []types.BlockContext, []types.BlockContext) {
-	if p.bcReader == nil {
-		log.Printf("WARNING: BlockchainReader not set, cannot compute reorg")
-		return blockA, nil, []types.BlockContext{blockB}
-	}
-
-	var chainA, chainB []types.BlockContext
-
-	// Quick check: if blockB extends blockA directly
-	if blockB.ParentHash == blockA.Hash {
-		return blockA, chainA, []types.BlockContext{blockB}
-	}
-
-	// Walk back blockB to same height as blockA
-	for blockB.BlockNumber > blockA.BlockNumber {
-		chainB = append(chainB, blockB)
-		header := p.bcReader.GetHeaderByHash(blockB.ParentHash)
+		header := p.bcReader.GetHeaderByHash(hash)
 		if header == nil {
-			log.Printf("ERROR: Failed to get header by hash %s", blockB.ParentHash.Hex())
-			return blockA, nil, []types.BlockContext{blockB}
+			return nil
 		}
-		blockB = types.BlockContext{
+		return &types.BlockContext{
 			BlockNumber: header.Number(),
 			Hash:        header.Hash(),
 			ParentHash:  header.ParentHash(),
@@ -433,42 +395,9 @@ func (p *PushProcessor) getCommonAncestor(blockA, blockB types.BlockContext) (ty
 		}
 	}
 
-	// Walk back both chains until we find common ancestor
-	for blockA.Hash != blockB.Hash {
-		chainA = append(chainA, blockA)
-		headerA := p.bcReader.GetHeaderByHash(blockA.ParentHash)
-		if headerA == nil {
-			log.Printf("ERROR: Failed to get header by hash %s", blockA.ParentHash.Hex())
-			return blockA, nil, chainB
-		}
-		blockA = types.BlockContext{
-			BlockNumber: headerA.Number(),
-			Hash:        headerA.Hash(),
-			ParentHash:  headerA.ParentHash(),
-			Timestamp:   headerA.Time(),
-		}
-
-		chainB = append(chainB, blockB)
-		headerB := p.bcReader.GetHeaderByHash(blockB.ParentHash)
-		if headerB == nil {
-			log.Printf("ERROR: Failed to get header by hash %s", blockB.ParentHash.Hex())
-			return blockA, chainA, nil
-		}
-		blockB = types.BlockContext{
-			BlockNumber: headerB.Number(),
-			Hash:        headerB.Hash(),
-			ParentHash:  headerB.ParentHash(),
-			Timestamp:   headerB.Time(),
-		}
+	blockNotice := util.ComputeBlockChange(lastBlock, newBlock, fetcher)
+	if blockNotice != nil {
+		return p.PushBlockChangeNotification(blockNotice)
 	}
-
-	// Reverse both chains to get correct order
-	for i, j := 0, len(chainA)-1; i < j; i, j = i+1, j-1 {
-		chainA[i], chainA[j] = chainA[j], chainA[i]
-	}
-	for i, j := 0, len(chainB)-1; i < j; i, j = i+1, j-1 {
-		chainB[i], chainB[j] = chainB[j], chainB[i]
-	}
-
-	return blockA, chainA, chainB
+	return nil
 }
