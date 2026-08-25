@@ -142,6 +142,8 @@ func (t *callTracer) ToTrace(f *callFrame, traceAddress []int64) ptypes.Trace {
 		if f.RevertReason != "" {
 			err = fmt.Sprintf("%s: %s", f.Error, f.RevertReason)
 		}
+	} else if f.ParentFailed {
+		err = "parent call failed"
 	}
 	return ptypes.Trace{
 		ID:                f.TraceID,
@@ -365,7 +367,7 @@ func (t *callTracer) addTraceAndLog(cf *callFrame, traceAddress []int64) {
 		}
 	}
 	for i := range cf.Calls {
-		if cf.Calls[i].failed() {
+		if cf.Calls[i].failed() || cf.Calls[i].ParentFailed {
 			BlockCtx.BlockFile.ErrorTraces = append(BlockCtx.BlockFile.ErrorTraces, t.ToTrace(&cf.Calls[i], childTraceAddress(traceAddress, int64(i))))
 		} else {
 			BlockCtx.BlockFile.Traces = append(BlockCtx.BlockFile.Traces, t.ToTrace(&cf.Calls[i], childTraceAddress(traceAddress, int64(i))))
