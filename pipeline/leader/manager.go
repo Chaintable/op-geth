@@ -96,6 +96,18 @@ func (m *Manager) IsLeader() bool {
 	return false
 }
 
+// IsLeaderLocked is like IsLeader but must be called while LeaderMutex is
+// already held (read or write) by the caller. Avoids a double-lock in hot paths.
+func (m *Manager) IsLeaderLocked() bool {
+	if m.ManualMode {
+		return !m.IsManualBackup
+	}
+	if m.LeaderFailover != nil {
+		return m.LeaderFailover.IsLeaderLocked()
+	}
+	return false
+}
+
 func (m *Manager) IsBackup() bool {
 	if m.ManualMode {
 		return m.IsManualBackup
