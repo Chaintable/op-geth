@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/pipeline/leader"
 	"github.com/ethereum/go-ethereum/pipeline/metrics"
 
@@ -29,6 +30,9 @@ type PushProcessor struct {
 	S3DataCh        chan *DataFile
 	Brokers         []string
 	Topic           string
+	bcReader        BlockchainReader // for reorg computation
+	noticeMu        sync.RWMutex     // protects LastBlockNotice
+	commitMu        sync.Mutex       // serializes NotifyBlockCommit calls
 }
 
 func NewPushProcessor(region string, bucket string, brokers []string, topic string, s3TempDir string) (*PushProcessor, error) {
@@ -66,9 +70,9 @@ func (p *PushProcessor) UpdateLastBlock() error {
 	}
 	log.Printf("update last block notice: %+v\n", lastBlockNotice)
 
-	// Simply update the last block notice without locking
-	// The locking should be handled at a higher level if needed
+	p.noticeMu.Lock()
 	p.LastBlockNotice = lastBlockNotice
+	p.noticeMu.Unlock()
 	return nil
 }
 
@@ -235,6 +239,9 @@ func (p *PushProcessor) UploadFilesToS3(files []*DataFile) error {
 }
 
 func (p *PushProcessor) LastPushedBlock() *types.BlockContext {
+	p.noticeMu.RLock()
+	defer p.noticeMu.RUnlock()
+
 	if p.LastBlockNotice == nil {
 		return nil
 	}
@@ -319,7 +326,9 @@ func (p *PushProcessor) PushBlockChangeNotification(blockNotice *types.BlockChan
 	}
 
 	// 更新最新的区块通知
+	p.noticeMu.Lock()
 	p.LastBlockNotice = blockNotice
+	p.noticeMu.Unlock()
 	metrics.LatestBlockNumber.Update(int64(blockNotice.NewBlocks[len(blockNotice.NewBlocks)-1].BlockNumber))
 	metrics.LatestBlockTime.Update(int64(blockNotice.NewBlocks[len(blockNotice.NewBlocks)-1].Timestamp))
 	return nil
@@ -328,4 +337,67 @@ func (p *PushProcessor) PushBlockChangeNotification(blockNotice *types.BlockChan
 func (p *PushProcessor) Close() {
 	p.KafkaWriter.Close()
 	close(p.quitCh)
+}
+
+// SetBlockchainReader sets the blockchain reader for reorg computation.
+func (p *PushProcessor) SetBlockchainReader(reader BlockchainReader) {
+	p.bcReader = reader
+}
+
+// NotifyBlockCommit is called when a new block is committed to the canonical chain.
+// It computes reorg if needed and pushes block change notification to Kafka.
+func (p *PushProcessor) NotifyBlockCommit(newBlock types.BlockContext) error {
+	// Serialize all NotifyBlockCommit calls to avoid concurrent reorg computation
+	p.commitMu.Lock()
+	defer p.commitMu.Unlock()
+
+	// Check leadership early to avoid wasted computation on backup nodes
+	if !leader.GlobalManager.IsLeader() {
+		return nil
+	}
+
+	// Get last pushed block under notice mutex
+	p.noticeMu.RLock()
+	lastPushedBlock := p.LastBlockNotice
+	p.noticeMu.RUnlock()
+
+	if lastPushedBlock == nil {
+		// No previous block, this is the first push
+		blockNotice := &types.BlockChangeNotification{
+			ChangeType: 1, // new blocks
+			NewBlocks:  []types.BlockContext{newBlock},
+		}
+		return p.PushBlockChangeNotification(blockNotice)
+	}
+
+	lastBlock := lastPushedBlock.NewBlocks[len(lastPushedBlock.NewBlocks)-1]
+
+	// Check if this block extends the chain
+	if lastBlock.BlockNumber >= newBlock.BlockNumber {
+		// Block number not advancing, skip (likely unwind or same block)
+		return nil
+	}
+
+	// Compute common ancestor and reorg using utility function
+	fetcher := func(hash common.Hash) *types.BlockContext {
+		if p.bcReader == nil {
+			return nil
+		}
+		header := p.bcReader.GetHeaderByHash(hash)
+		if header == nil {
+			return nil
+		}
+		return &types.BlockContext{
+			BlockNumber: header.Number(),
+			Hash:        header.Hash(),
+			ParentHash:  header.ParentHash(),
+			Timestamp:   header.Time(),
+		}
+	}
+
+	blockNotice := util.ComputeBlockChange(lastBlock, newBlock, fetcher)
+	if blockNotice != nil {
+		return p.PushBlockChangeNotification(blockNotice)
+	}
+	return nil
 }
