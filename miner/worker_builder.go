@@ -365,13 +365,15 @@ func (w *worker) simulateBundle(
 		tempGasUsed   uint64
 		bundleGasUsed uint64
 		bundleGasFees = new(big.Int)
+		vmConfig      = *w.chain.GetVMConfig()
 	)
+	vmConfig.Tracer = nil
 
 	for i, tx := range bundle.Txs {
 		state.SetTxContext(tx.Hash(), i+currentTxCount)
 
 		receipt, err := core.ApplyTransaction(w.chainConfig, w.chain, &w.coinbase, gasPool, state, env.header, tx,
-			&tempGasUsed, *w.chain.GetVMConfig())
+			&tempGasUsed, vmConfig)
 		if err != nil {
 			log.Warn("fail to simulate bundle", "hash", bundle.Hash().String(), "err", err)
 
@@ -442,6 +444,8 @@ func (w *worker) simulateBundle(
 func (w *worker) simulateGaslessBundle(env *environment, bundle *types.Bundle) (*types.SimulateGaslessBundleResp, error) {
 	validResults := make([]types.GaslessTxSimResult, 0)
 	gasReachedResults := make([]types.GaslessTxSimResult, 0)
+	vmConfig := *w.chain.GetVMConfig()
+	vmConfig.Tracer = nil
 
 	txIdx := 0
 	for _, tx := range bundle.Txs {
@@ -453,7 +457,7 @@ func (w *worker) simulateGaslessBundle(env *environment, bundle *types.Bundle) (
 		)
 
 		receipt, err := core.ApplyTransaction(w.chainConfig, w.chain, &w.coinbase, env.gasPool, env.state, env.header, tx,
-			&env.header.GasUsed, *w.chain.GetVMConfig())
+			&env.header.GasUsed, vmConfig)
 		if err != nil {
 			env.state.RevertToSnapshot(snap)
 			env.gasPool.SetGas(gp)

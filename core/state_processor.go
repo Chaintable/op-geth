@@ -22,6 +22,7 @@ import (
 	"math/big"
 	"time"
 
+	ptracer "github.com/Chaintable/pipeline/tracer"
 	"github.com/ethereum/go-ethereum/log"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -88,6 +89,12 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		vmenv   = vm.NewEVM(context, vm.TxContext{}, statedb, p.config, cfg)
 		signer  = types.MakeSigner(p.config, header.Number, header.Time)
 	)
+	pipelineTracer, _ := cfg.Tracer.(*ptracer.PipelineTracer)
+	if pipelineTracer != nil {
+		statedb.SetLiveTraceHooks(pipelineTracer.OnLog, pipelineTracer.OnCommit)
+	} else {
+		statedb.SetLiveTraceHooks(nil, nil)
+	}
 	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
 		ProcessBeaconBlockRoot(*beaconRoot, vmenv, statedb)
 	}
@@ -104,7 +111,23 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 			return nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 		}
 		statedb.SetTxContext(tx.Hash(), i)
+		if pipelineTracer != nil {
+			pipelineTracer.OnTxStart(tx, msg.From)
+		}
 		receipt, err := applyTransaction(msg, p.config, gp, statedb, blockNumber, blockHash, tx, usedGas, vmenv)
+		if pipelineTracer != nil {
+			if receipt != nil {
+				receipt.EffectiveGasPrice = new(big.Int).Set(msg.GasPrice)
+				if context.L1CostFunc != nil && !tx.IsDepositTx() && receipt.GasUsed > 0 {
+					l1Fee := context.L1CostFunc(tx.RollupCostData(), context.Time)
+					if l1Fee != nil && l1Fee.Sign() > 0 {
+						gasUsed := new(big.Int).SetUint64(receipt.GasUsed)
+						receipt.EffectiveGasPrice.Add(receipt.EffectiveGasPrice, new(big.Int).Div(l1Fee, gasUsed))
+					}
+				}
+			}
+			pipelineTracer.OnTxEnd(receipt, err)
+		}
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 		}

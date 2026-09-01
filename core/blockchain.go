@@ -28,6 +28,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	ptracer "github.com/Chaintable/pipeline/tracer"
+	ptypes "github.com/Chaintable/pipeline/types"
 	"golang.org/x/exp/slices"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -171,8 +173,8 @@ type CacheConfig struct {
 	JournalFile          bool                  // Whether to enable journal file
 	UseBase              bool                  // Flag if just use base for nodebufferlist
 
-	TrieCommitInterval uint64  // Define a block height interval, commit trie every TrieCommitInterval block height.
-	TriesInMemory      uint64  // Number of recent block tries to keep in memory before dereferencing (default = 128)
+	TrieCommitInterval uint64 // Define a block height interval, commit trie every TrieCommitInterval block height.
+	TriesInMemory      uint64 // Number of recent block tries to keep in memory before dereferencing (default = 128)
 }
 
 // triedbConfig derives the configures for trie database.
@@ -297,12 +299,13 @@ type BlockChain struct {
 	stopping      atomic.Bool   // false if chain is running, true when stopped
 	procInterrupt atomic.Bool   // interrupt signaler for block processing
 
-	engine     consensus.Engine
-	validator  Validator // Block and state validator interface
-	prefetcher Prefetcher
-	processor  Processor // Block transaction processor interface
-	forker     *ForkChoice
-	vmConfig   vm.Config
+	engine         consensus.Engine
+	validator      Validator // Block and state validator interface
+	prefetcher     Prefetcher
+	processor      Processor // Block transaction processor interface
+	forker         *ForkChoice
+	vmConfig       vm.Config
+	pipelineTracer *ptracer.PipelineTracer
 
 	// parallel EVM related
 	enableTxDAG bool
@@ -365,6 +368,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 		engine:              engine,
 		vmConfig:            vmConfig,
 	}
+	bc.pipelineTracer, _ = vmConfig.Tracer.(*ptracer.PipelineTracer)
 	bc.flushInterval.Store(int64(cacheConfig.TrieTimeLimit))
 	bc.forker = NewForkChoice(bc, shouldPreserve)
 	bc.stateCache = state.NewDatabaseWithNodeDB(bc.db, bc.triedb)
@@ -547,6 +551,17 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 			NoTries:    bc.stateCache.NoTries(),
 		}
 		bc.snaps, _ = snapshot.New(snapconfig, bc.db, bc.triedb, head.Root)
+	}
+	if bc.pipelineTracer != nil {
+		bc.pipelineTracer.OnBlockchainInit(chainConfig)
+		if bc.CurrentBlock().Number.Uint64() == 0 {
+			storedGenesis, err := ReadGenesis(bc.db)
+			if err != nil {
+				bc.pipelineTracer.OnClose()
+				return nil, fmt.Errorf("live tracer failed to load genesis: %w", err)
+			}
+			bc.pipelineTracer.OnGenesisBlock(bc.genesisBlock, storedGenesis.Alloc)
+		}
 	}
 
 	// Start future block processor.
@@ -1098,6 +1113,9 @@ func (bc *BlockChain) stopWithoutSaving() {
 // it will abort them using the procInterrupt.
 func (bc *BlockChain) Stop() {
 	bc.stopWithoutSaving()
+	if bc.pipelineTracer != nil {
+		bc.pipelineTracer.OnClose()
+	}
 
 	// Ensure that the entirety of the state snapshot is journaled to disk.
 	var snapBase common.Hash
@@ -1749,6 +1767,9 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool) (int, error)
 		_, stateExist := bc.miningStateCache.Get(block.Hash())
 		minerMode = receiptExist && logExist && stateExist
 	}
+	if bc.pipelineTracer != nil {
+		minerMode = false
+	}
 
 	// Start a parallel signature recovery (signer will fluke on fork transition, minimal perf loss)
 	SenderCacher.RecoverFromBlocks(types.MakeSigner(bc.chainConfig, chain[0].Number(), chain[0].Time()), chain)
@@ -1948,6 +1969,12 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool) (int, error)
 			followupInterrupt atomic.Bool
 			err               error
 		)
+		if bc.pipelineTracer != nil {
+			receiptExist = false
+			logExist = false
+			stateExist = false
+			statedb = nil
+		}
 
 		// skip block process if we already have the state, receipts and logs from mining work
 		if !(receiptExist && logExist && stateExist) {
@@ -1972,7 +1999,9 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool) (int, error)
 					throwaway, _ := state.New(parent.Root, bc.stateCache, bc.snaps)
 
 					go func(start time.Time, followup *types.Block, throwaway *state.StateDB) {
-						bc.prefetcher.Prefetch(followup, throwaway, bc.vmConfig, &followupInterrupt)
+						vmConfig := bc.vmConfig
+						vmConfig.Tracer = nil
+						bc.prefetcher.Prefetch(followup, throwaway, vmConfig, &followupInterrupt)
 
 						blockPrefetchExecuteTimer.Update(time.Since(start))
 						if followupInterrupt.Load() {
@@ -1986,8 +2015,14 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool) (int, error)
 
 			// Process block using the parent state as reference point
 			pstart = time.Now()
+			if bc.pipelineTracer != nil {
+				bc.pipelineTracer.OnBlockStart(block)
+			}
 			receipts, logs, usedGas, err = bc.processor.Process(block, statedb, bc.vmConfig)
 			if err != nil {
+				if bc.pipelineTracer != nil {
+					bc.pipelineTracer.OnBlockEnd(err)
+				}
 				bc.reportBlock(block, receipts, err)
 				followupInterrupt.Store(true)
 				return it.index, err
@@ -2012,6 +2047,9 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool) (int, error)
 			}()
 		} else {
 			if err := bc.validator.ValidateState(block, statedb, receipts, usedGas, false); err != nil {
+				if bc.pipelineTracer != nil {
+					bc.pipelineTracer.OnBlockEnd(err)
+				}
 				bc.reportBlock(block, receipts, err)
 				followupInterrupt.Store(true)
 				return it.index, err
@@ -2051,11 +2089,22 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool) (int, error)
 		}
 		followupInterrupt.Store(true)
 		if err != nil {
+			if bc.pipelineTracer != nil {
+				bc.pipelineTracer.OnBlockEnd(err)
+			}
 			return it.index, err
 		}
 		if minerMode {
 			if err := <-asyncValidateStateCh; err != nil {
 				panic(fmt.Errorf("self mined block(hash: %x number %v) async verify state err: %w", block.Hash(), block.NumberU64(), err))
+			}
+		}
+		if bc.pipelineTracer != nil {
+			bc.pipelineTracer.OnBlockEnd(nil)
+			if setHead && status == CanonStatTy {
+				if err := bc.pushPipelineHead(block); err != nil {
+					log.Error("Failed to push pipeline head", "number", block.NumberU64(), "hash", block.Hash(), "err", err)
+				}
 			}
 		}
 		bc.CacheBlock(block.Hash(), block)
@@ -2595,6 +2644,11 @@ func (bc *BlockChain) SetCanonical(head *types.Block) (common.Hash, error) {
 	// Emit events
 	logs := bc.collectLogs(head, false)
 	wg.Wait()
+	if bc.pipelineTracer != nil {
+		if err := bc.pushPipelineHead(head); err != nil {
+			log.Error("Failed to push pipeline head", "number", head.NumberU64(), "hash", head.Hash(), "err", err)
+		}
+	}
 
 	bc.chainFeed.Send(ChainEvent{Block: head, Hash: head.Hash(), Logs: logs})
 	if len(logs) > 0 {
@@ -2613,6 +2667,94 @@ func (bc *BlockChain) SetCanonical(head *types.Block) (common.Hash, error) {
 	}
 	log.Info("Chain head was updated", context...)
 	return head.Hash(), nil
+}
+
+func (bc *BlockChain) pushPipelineHead(head *types.Block) error {
+	pusher := ptracer.NodeXPusher
+	if pusher == nil {
+		return nil
+	}
+	last := pusher.LastPushedBlock()
+	if last == nil {
+		log.Warn("Pipeline has no previously published block", "head", head.NumberU64(), "hash", head.Hash())
+		return nil
+	}
+	if last.BlockNumber > head.NumberU64() {
+		return nil
+	}
+	_, dropBlocks, newBlocks, err := bc.pipelineCommonAncestor(*last, ptypes.BlockContext{
+		BlockNumber: head.NumberU64(),
+		Hash:        head.Hash(),
+		ParentHash:  head.ParentHash(),
+		Timestamp:   head.Time(),
+	})
+	if err != nil {
+		return err
+	}
+	if len(dropBlocks) == 0 && len(newBlocks) == 0 {
+		return nil
+	}
+	change := &ptypes.BlockChangeNotification{
+		ChangeType: 1,
+		NewBlocks:  newBlocks,
+	}
+	if len(dropBlocks) > 0 {
+		change.ChangeType = 2
+		change.DropBlocks = dropBlocks
+	}
+	if err := pusher.PushBlockChangeNotification(change); err != nil {
+		return err
+	}
+	log.Info("Pushed pipeline head", "dropBlocks", len(dropBlocks), "newBlocks", len(newBlocks), "number", head.NumberU64(), "hash", head.Hash())
+	return nil
+}
+
+func (bc *BlockChain) pipelineCommonAncestor(a, b ptypes.BlockContext) (ptypes.BlockContext, []ptypes.BlockContext, []ptypes.BlockContext, error) {
+	var dropBlocks, newBlocks []ptypes.BlockContext
+	parent := func(block ptypes.BlockContext) (ptypes.BlockContext, error) {
+		header := bc.GetHeaderByHash(block.ParentHash)
+		if header == nil {
+			return ptypes.BlockContext{}, fmt.Errorf("pipeline parent header %s not found", block.ParentHash)
+		}
+		return ptypes.BlockContext{
+			BlockNumber: header.Number.Uint64(),
+			Hash:        header.Hash(),
+			ParentHash:  header.ParentHash,
+			Timestamp:   header.Time,
+		}, nil
+	}
+	for a.BlockNumber > b.BlockNumber {
+		dropBlocks = append(dropBlocks, a)
+		var err error
+		a, err = parent(a)
+		if err != nil {
+			return ptypes.BlockContext{}, nil, nil, err
+		}
+	}
+	for b.BlockNumber > a.BlockNumber {
+		newBlocks = append(newBlocks, b)
+		var err error
+		b, err = parent(b)
+		if err != nil {
+			return ptypes.BlockContext{}, nil, nil, err
+		}
+	}
+	for a.Hash != b.Hash {
+		dropBlocks = append(dropBlocks, a)
+		newBlocks = append(newBlocks, b)
+		var err error
+		a, err = parent(a)
+		if err != nil {
+			return ptypes.BlockContext{}, nil, nil, err
+		}
+		b, err = parent(b)
+		if err != nil {
+			return ptypes.BlockContext{}, nil, nil, err
+		}
+	}
+	slices.Reverse(dropBlocks)
+	slices.Reverse(newBlocks)
+	return a, dropBlocks, newBlocks, nil
 }
 
 func (bc *BlockChain) updateFutureBlocks() {
