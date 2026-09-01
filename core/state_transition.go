@@ -421,6 +421,9 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 	// Failed deposits must still be included. Unless we cannot produce the block at all due to the gas limit.
 	// On deposit failure, we rewind any state changes from after the minting, and increment the nonce.
 	if err != nil && err != ErrGasLimitReached && st.msg.IsDepositTx {
+		if st.evm.Config.Tracer != nil {
+			st.evm.Config.Tracer.CaptureEnter(vm.STOP, common.Address{}, common.Address{}, nil, 0, nil)
+		}
 		st.state.RevertToSnapshot(snap)
 		// Even though we revert the state changes, always increment the nonce for the next deposit transaction
 		st.state.SetNonce(st.msg.From, st.state.GetNonce(st.msg.From)+1)

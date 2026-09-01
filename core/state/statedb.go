@@ -159,6 +159,10 @@ type StateDB struct {
 
 	// Testing hooks
 	onCommit func(states *triestate.Set) // Hook invoked when commit is performed
+
+	// Live tracing hooks, installed only for imported block execution.
+	logHook    func(*types.Log)
+	commitHook func(common.Hash, common.Hash, map[common.Hash]struct{}, map[common.Hash][]byte, map[common.Address][]byte, map[common.Hash]map[common.Hash][]byte, map[common.Address]map[common.Hash][]byte, map[common.Hash][]byte)
 }
 
 // New creates a new state from a given trie.
@@ -272,12 +276,23 @@ func (s *StateDB) Error() error {
 	return s.dbErr
 }
 
+func (s *StateDB) SetLiveTraceHooks(
+	logHook func(*types.Log),
+	commitHook func(common.Hash, common.Hash, map[common.Hash]struct{}, map[common.Hash][]byte, map[common.Address][]byte, map[common.Hash]map[common.Hash][]byte, map[common.Address]map[common.Hash][]byte, map[common.Hash][]byte),
+) {
+	s.logHook = logHook
+	s.commitHook = commitHook
+}
+
 func (s *StateDB) AddLog(log *types.Log) {
 	s.journal.append(addLogChange{txhash: s.thash})
 
 	log.TxHash = s.thash
 	log.TxIndex = uint(s.txIndex)
 	log.Index = s.logSize
+	if s.logHook != nil {
+		s.logHook(log)
+	}
 	s.logs[s.thash] = append(s.logs[s.thash], log)
 	s.logSize++
 }
@@ -1373,6 +1388,16 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 	if !s.fullProcessed {
 		s.stateRoot = s.IntermediateRoot(deleteEmptyObjects)
 	}
+	originRoot := s.originalRoot
+	if originRoot == (common.Hash{}) {
+		originRoot = types.EmptyRootHash
+	}
+	codes := make(map[common.Hash][]byte)
+	for addr := range s.stateObjectsDirty {
+		if obj := s.stateObjects[addr]; obj != nil && !obj.deleted && obj.code != nil && obj.dirtyCode {
+			codes[common.BytesToHash(obj.CodeHash())] = obj.code
+		}
+	}
 
 	if metrics.EnabledExpensive {
 		defer func(start time.Time) {
@@ -1588,6 +1613,9 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 	s.snap = nil
 	if root == (common.Hash{}) {
 		root = types.EmptyRootHash
+	}
+	if s.commitHook != nil {
+		s.commitHook(originRoot, root, s.convertAccountSet(s.stateObjectsDestruct), s.accounts, s.accountsOrigin, s.storages, s.storagesOrigin, codes)
 	}
 	// Clear all internal flags at the end of commit operation.
 	s.accounts = make(map[common.Hash][]byte)
