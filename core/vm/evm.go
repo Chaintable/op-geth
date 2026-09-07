@@ -70,6 +70,18 @@ func (evm *EVM) precompile(addr common.Address) (PrecompiledContract, bool) {
 	return p, ok
 }
 
+func (evm *EVM) captureEarlyExit(typ OpCode, from common.Address, to common.Address, input []byte, gas uint64, value *uint256.Int, gasUsed uint64, err error) {
+	tracer, ok := evm.Config.Tracer.(EarlyCallTracer)
+	if !ok {
+		return
+	}
+	var valueBig *big.Int
+	if value != nil {
+		valueBig = value.ToBig()
+	}
+	tracer.CaptureEarlyExit(evm.depth, typ, from, to, input, gas, valueBig, gasUsed, err)
+}
+
 // BlockContext provides the EVM with auxiliary information. Once provided
 // it shouldn't be modified.
 type BlockContext struct {
@@ -200,10 +212,12 @@ func (evm *EVM) Interpreter() *EVMInterpreter {
 func (evm *EVM) Call(caller ContractRef, addr common.Address, input []byte, gas uint64, value *uint256.Int) (ret []byte, leftOverGas uint64, err error) {
 	// Fail if we're trying to execute above the call depth limit
 	if evm.depth > int(params.CallCreateDepth) {
+		evm.captureEarlyExit(CALL, caller.Address(), addr, input, gas, value, 0, ErrDepth)
 		return nil, gas, ErrDepth
 	}
 	// Fail if we're trying to transfer more than the available balance
 	if !value.IsZero() && !evm.Context.CanTransfer(evm.StateDB, caller.Address(), value) {
+		evm.captureEarlyExit(CALL, caller.Address(), addr, input, gas, value, 0, ErrInsufficientBalance)
 		return nil, gas, ErrInsufficientBalance
 	}
 	snapshot := evm.StateDB.Snapshot()
@@ -299,6 +313,7 @@ func (evm *EVM) Call(caller ContractRef, addr common.Address, input []byte, gas 
 func (evm *EVM) CallCode(caller ContractRef, addr common.Address, input []byte, gas uint64, value *uint256.Int) (ret []byte, leftOverGas uint64, err error) {
 	// Fail if we're trying to execute above the call depth limit
 	if evm.depth > int(params.CallCreateDepth) {
+		evm.captureEarlyExit(CALLCODE, caller.Address(), addr, input, gas, value, 0, ErrDepth)
 		return nil, gas, ErrDepth
 	}
 	// Fail if we're trying to transfer more than the available balance
@@ -306,6 +321,7 @@ func (evm *EVM) CallCode(caller ContractRef, addr common.Address, input []byte, 
 	// if caller doesn't have enough balance, it would be an error to allow
 	// over-charging itself. So the check here is necessary.
 	if !evm.Context.CanTransfer(evm.StateDB, caller.Address(), value) {
+		evm.captureEarlyExit(CALLCODE, caller.Address(), addr, input, gas, value, 0, ErrInsufficientBalance)
 		return nil, gas, ErrInsufficientBalance
 	}
 	var snapshot = evm.StateDB.Snapshot()
@@ -360,6 +376,7 @@ func (evm *EVM) CallCode(caller ContractRef, addr common.Address, input []byte, 
 func (evm *EVM) DelegateCall(caller ContractRef, addr common.Address, input []byte, gas uint64) (ret []byte, leftOverGas uint64, err error) {
 	// Fail if we're trying to execute above the call depth limit
 	if evm.depth > int(params.CallCreateDepth) {
+		evm.captureEarlyExit(DELEGATECALL, caller.Address(), addr, input, gas, nil, 0, ErrDepth)
 		return nil, gas, ErrDepth
 	}
 	var snapshot = evm.StateDB.Snapshot()
@@ -415,6 +432,7 @@ func (evm *EVM) DelegateCall(caller ContractRef, addr common.Address, input []by
 func (evm *EVM) StaticCall(caller ContractRef, addr common.Address, input []byte, gas uint64) (ret []byte, leftOverGas uint64, err error) {
 	// Fail if we're trying to execute above the call depth limit
 	if evm.depth > int(params.CallCreateDepth) {
+		evm.captureEarlyExit(STATICCALL, caller.Address(), addr, input, gas, nil, 0, ErrDepth)
 		return nil, gas, ErrDepth
 	}
 	// We take a snapshot here. This is a bit counter-intuitive, and could probably be skipped.
@@ -514,13 +532,16 @@ func (evm *EVM) create(caller ContractRef, codeAndHash *codeAndHash, gas uint64,
 	// Depth check execution. Fail if we're trying to execute above the
 	// limit.
 	if evm.depth > int(params.CallCreateDepth) {
+		evm.captureEarlyExit(typ, caller.Address(), address, codeAndHash.code, gas, value, 0, ErrDepth)
 		return nil, common.Address{}, gas, ErrDepth
 	}
 	if !evm.Context.CanTransfer(evm.StateDB, caller.Address(), value) {
+		evm.captureEarlyExit(typ, caller.Address(), address, codeAndHash.code, gas, value, 0, ErrInsufficientBalance)
 		return nil, common.Address{}, gas, ErrInsufficientBalance
 	}
 	nonce := evm.StateDB.GetNonce(caller.Address())
 	if nonce+1 < nonce {
+		evm.captureEarlyExit(typ, caller.Address(), address, codeAndHash.code, gas, value, 0, ErrNonceUintOverflow)
 		return nil, common.Address{}, gas, ErrNonceUintOverflow
 	}
 	evm.StateDB.SetNonce(caller.Address(), nonce+1)
@@ -532,6 +553,7 @@ func (evm *EVM) create(caller ContractRef, codeAndHash *codeAndHash, gas uint64,
 	// Ensure there's no existing contract already at the designated address
 	contractHash := evm.StateDB.GetCodeHash(address)
 	if evm.StateDB.GetNonce(address) != 0 || (contractHash != (common.Hash{}) && contractHash != types.EmptyCodeHash) {
+		evm.captureEarlyExit(typ, caller.Address(), address, codeAndHash.code, gas, value, gas, ErrContractAddressCollision)
 		return nil, common.Address{}, 0, ErrContractAddressCollision
 	}
 	// Create a new account on the state

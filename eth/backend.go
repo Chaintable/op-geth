@@ -19,6 +19,7 @@ package eth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -26,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	ptracer "github.com/Chaintable/pipeline/tracer"
 	"github.com/ethereum/go-ethereum/core/txpool/bundlepool"
 
 	"github.com/ethereum/go-ethereum/accounts"
@@ -260,6 +262,20 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			JournalFile:          config.JournalFileEnabled,
 		}
 	)
+	if config.VMTrace != "" {
+		if config.VMTrace != "pipeline" {
+			return nil, fmt.Errorf("unsupported VM tracer %q", config.VMTrace)
+		}
+		traceConfig := json.RawMessage("{}")
+		if config.VMTraceJsonConfig != "" {
+			traceConfig = json.RawMessage(config.VMTraceJsonConfig)
+		}
+		pipelineTracer, err := ptracer.NewPipelineTracer(traceConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create pipeline tracer: %w", err)
+		}
+		vmConfig.Tracer = pipelineTracer
+	}
 	// Override the chain config with provided settings.
 	var overrides core.ChainOverrides
 	if config.OverrideCancun != nil {

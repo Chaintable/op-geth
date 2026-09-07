@@ -261,7 +261,9 @@ func (b *EthAPIBackend) GetTd(ctx context.Context, hash common.Hash) *big.Int {
 
 func (b *EthAPIBackend) GetEVM(ctx context.Context, msg *core.Message, state *state.StateDB, header *types.Header, vmConfig *vm.Config, blockCtx *vm.BlockContext) *vm.EVM {
 	if vmConfig == nil {
-		vmConfig = b.eth.blockchain.GetVMConfig()
+		config := *b.eth.blockchain.GetVMConfig()
+		config.Tracer = nil
+		vmConfig = &config
 	}
 	txContext := core.NewEVMTxContext(msg)
 	var context vm.BlockContext

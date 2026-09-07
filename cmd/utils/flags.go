@@ -643,6 +643,17 @@ var (
 		Usage:    "Record information useful for VM and contract debugging",
 		Category: flags.VMCategory,
 	}
+	VMTraceFlag = &cli.StringFlag{
+		Name:     "vmtrace",
+		Usage:    "Name of tracer which should record imported blocks",
+		Category: flags.VMCategory,
+	}
+	VMTraceJSONConfigFlag = &cli.StringFlag{
+		Name:     "vmtrace.jsonconfig",
+		Usage:    "Tracer configuration (JSON)",
+		Value:    "{}",
+		Category: flags.VMCategory,
+	}
 
 	// API options.
 	RPCGlobalGasCapFlag = &cli.Uint64Flag{
@@ -2018,6 +2029,10 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	if ctx.IsSet(VMEnableDebugFlag.Name) {
 		// TODO(fjl): force-enable this in --dev mode
 		cfg.EnablePreimageRecording = ctx.Bool(VMEnableDebugFlag.Name)
+	}
+	if ctx.IsSet(VMTraceFlag.Name) {
+		cfg.VMTrace = ctx.String(VMTraceFlag.Name)
+		cfg.VMTraceJsonConfig = ctx.String(VMTraceJSONConfigFlag.Name)
 	}
 
 	if ctx.IsSet(ParallelTxDAGFlag.Name) {

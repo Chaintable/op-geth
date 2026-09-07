@@ -26,6 +26,7 @@ import (
 	cmath "github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
@@ -415,23 +416,38 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 		}
 		st.state.AddBalance(st.msg.From, mintU256)
 	}
+	startNonce := st.state.GetNonce(st.msg.From)
 	snap := st.state.Snapshot()
 
 	result, err := st.innerTransitionDb()
 	// Failed deposits must still be included. Unless we cannot produce the block at all due to the gas limit.
 	// On deposit failure, we rewind any state changes from after the minting, and increment the nonce.
 	if err != nil && err != ErrGasLimitReached && st.msg.IsDepositTx {
-		st.state.RevertToSnapshot(snap)
-		// Even though we revert the state changes, always increment the nonce for the next deposit transaction
-		st.state.SetNonce(st.msg.From, st.state.GetNonce(st.msg.From)+1)
-		// Record deposits as using all their gas (matches the gas pool)
-		// System Transactions are special & are not recorded as using any gas (anywhere)
+		// System Transactions are special & are not recorded as using any gas (anywhere).
 		// Regolith changes this behaviour so the actual gas used is reported.
 		// In this case the tx is invalid so is recorded as using all gas.
 		gasUsed := st.msg.GasLimit
 		if st.msg.IsSystemTx && !st.evm.ChainConfig().IsRegolith(st.evm.Context.Time) {
 			gasUsed = 0
 		}
+		if st.evm.Config.Tracer != nil {
+			if tracer, ok := st.evm.Config.Tracer.(vm.EarlyCallTracer); ok {
+				typ := vm.CALL
+				var to common.Address
+				if st.msg.To == nil {
+					typ = vm.CREATE
+					to = crypto.CreateAddress(st.msg.From, startNonce)
+				} else {
+					to = *st.msg.To
+				}
+				tracer.CaptureEarlyExit(0, typ, st.msg.From, to, st.msg.Data, st.msg.GasLimit, st.msg.Value, gasUsed, fmt.Errorf("failed deposit: %w", err))
+			} else {
+				st.evm.Config.Tracer.CaptureEnter(vm.STOP, common.Address{}, common.Address{}, nil, 0, nil)
+			}
+		}
+		st.state.RevertToSnapshot(snap)
+		// Even though we revert the state changes, always increment the nonce for the next deposit transaction
+		st.state.SetNonce(st.msg.From, st.state.GetNonce(st.msg.From)+1)
 		result = &ExecutionResult{
 			UsedGas:    gasUsed,
 			Err:        fmt.Errorf("failed deposit: %w", err),
