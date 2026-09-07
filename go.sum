@@ -79,6 +79,8 @@ github.com/ChainSafe/go-schnorrkel v0.0.0-20200405005733-88cbf1b4c40d h1:nalkkPQ
 github.com/ChainSafe/go-schnorrkel v0.0.0-20200405005733-88cbf1b4c40d/go.mod h1:URdX5+vg25ts3aCh8H5IFZybJYKWhJHYMTnf+ULtoC4=
 github.com/Chaintable/pipeline v0.0.64-0.20260901122145-26b9b2b32607 h1:FrabZ6pORx1sSpkXLeNYgtGFRnLUA95YQIjmWTIZDp0=
 github.com/Chaintable/pipeline v0.0.64-0.20260901122145-26b9b2b32607/go.mod h1:q8vNjLX2lngKBIX3EuMFn9WW5PA9dyivxF10wz7XU2w=
+github.com/Chaintable/pipeline v0.0.64-0.20260907074110-014280488579 h1:S1jvWkQ/QiF7Q1cOa514/5xHs+s6vf5Ut2IAxniUJdQ=
+github.com/Chaintable/pipeline v0.0.64-0.20260907074110-014280488579/go.mod h1:q8vNjLX2lngKBIX3EuMFn9WW5PA9dyivxF10wz7XU2w=
 github.com/CloudyKit/fastprinter v0.0.0-20200109182630-33d98a066a53/go.mod h1:+3IMCy2vIlbG1XG/0ggNQv0SvxCAIpPM5b1nCz56Xno=
 github.com/CloudyKit/jet/v3 v3.0.0/go.mod h1:HKQPgSJmdK8hdoAbKUUWajkHyHo4RaU5rMdUywE7VMo=
 github.com/DATA-DOG/go-sqlmock v1.3.3/go.mod h1:f/Ixk793poVmq4qj/V1dPUg2JEAKC73Q5eFN3EC/SaM=
