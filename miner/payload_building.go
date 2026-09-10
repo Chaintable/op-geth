@@ -303,16 +303,26 @@ func (w *worker) buildPayload(args *BuildPayloadArgs) (*Payload, error) {
 		// to deliver for not missing slot.
 		// In OP-Stack, the "empty" block is constructed from provided txs only, i.e. no tx-pool usage.
 		emptyParams := &generateParams{
-			timestamp:   args.Timestamp,
-			forceTime:   true,
-			parentHash:  args.Parent,
-			coinbase:    args.FeeRecipient,
-			random:      args.Random,
-			withdrawals: args.Withdrawals,
-			beaconRoot:  args.BeaconRoot,
-			noTxs:       true,
-			txs:         args.Transactions,
-			gasLimit:    args.GasLimit,
+			timestamp:      args.Timestamp,
+			forceTime:      true,
+			parentHash:     args.Parent,
+			coinbase:       args.FeeRecipient,
+			random:         args.Random,
+			withdrawals:    args.Withdrawals,
+			beaconRoot:     args.BeaconRoot,
+			noTxs:          true,
+			txs:            args.Transactions,
+			gasLimit:       args.GasLimit,
+			reuseExecution: w.chain.PayloadTraceCacheEnabled() && w.config.EffectiveGasCeil == 0,
+		}
+		if emptyParams.reuseExecution {
+			// Blob sidecars and their accounting remain on the existing builder path.
+			for _, tx := range args.Transactions {
+				if tx.Type() == types.BlobTxType {
+					emptyParams.reuseExecution = false
+					break
+				}
+			}
 		}
 		start := time.Now()
 		empty := w.getSealingBlock(emptyParams)
@@ -321,6 +331,13 @@ func (w *worker) buildPayload(args *BuildPayloadArgs) (*Payload, error) {
 			return nil, empty.err
 		}
 		log.Info("Built empty payload succeed", "id", args.Id(), "number", empty.block.NumberU64(), "hash", empty.block.Hash(), "elapsed", common.PrettyDuration(time.Since(start)))
+		// generateWork has returned and its prefetcher is stopped. The builder
+		// must not access the executed state after transferring ownership here.
+		if empty.execution != nil {
+			w.chain.CachePayloadExecution(empty.execution)
+			empty.execution = nil
+			empty.env = nil
+		}
 
 		payload := newPayload(empty.block, args.Id())
 		// make sure to make it appear as full, otherwise it will wait indefinitely for payload building to complete.

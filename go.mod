@@ -6,7 +6,7 @@ toolchain go1.21.6
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.2.0
-	github.com/Chaintable/pipeline v0.0.64-0.20260907074110-014280488579
+	github.com/Chaintable/pipeline v0.0.64-0.20260910084146-e53af728d619
 	github.com/Microsoft/go-winio v0.6.1
 	github.com/VictoriaMetrics/fastcache v1.12.1
 	github.com/aws/aws-sdk-go-v2 v1.32.5

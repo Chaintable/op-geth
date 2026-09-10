@@ -289,6 +289,7 @@ type BlockChain struct {
 	miningReceiptsCache *lru.Cache[common.Hash, []*types.Receipt]
 	miningTxLogsCache   *lru.Cache[common.Hash, []*types.Log]
 	miningStateCache    *lru.Cache[common.Hash, *state.StateDB]
+	payloadExecutions   *payloadExecutionCache
 
 	// future blocks are blocks added for later processing
 	futureBlocks *lru.Cache[common.Hash, *types.Block]
@@ -369,6 +370,11 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 		vmConfig:            vmConfig,
 	}
 	bc.pipelineTracer, _ = vmConfig.Tracer.(*ptracer.PipelineTracer)
+	if bc.pipelineTracer != nil {
+		if limits := bc.pipelineTracer.PayloadCacheConfig(); limits.Enabled {
+			bc.payloadExecutions = newPayloadExecutionCache(limits)
+		}
+	}
 	bc.flushInterval.Store(int64(cacheConfig.TrieTimeLimit))
 	bc.forker = NewForkChoice(bc, shouldPreserve)
 	bc.stateCache = state.NewDatabaseWithNodeDB(bc.db, bc.triedb)
@@ -1113,6 +1119,9 @@ func (bc *BlockChain) stopWithoutSaving() {
 // it will abort them using the procInterrupt.
 func (bc *BlockChain) Stop() {
 	bc.stopWithoutSaving()
+	if bc.payloadExecutions != nil {
+		bc.payloadExecutions.close()
+	}
 	if bc.pipelineTracer != nil {
 		bc.pipelineTracer.OnClose()
 	}
@@ -1974,6 +1983,26 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool) (int, error)
 			logExist = false
 			stateExist = false
 			statedb = nil
+			parent := it.previous()
+			if parent == nil {
+				parent = bc.GetHeader(block.ParentHash(), block.NumberU64()-1)
+			}
+			if parent != nil {
+				if cached := bc.takePayloadExecution(block, parent.Root); cached != nil {
+					if err := bc.pipelineTracer.AdoptPayload(cached.Trace, block); err == nil {
+						receipts, logs, statedb, usedGas = cached.Receipts, cached.Logs, cached.State, cached.UsedGas
+						receiptExist, logExist, stateExist = true, true, true
+						statedb.SetExpectedStateRoot(block.Root())
+						statedb.SetLiveTraceHooks(bc.pipelineTracer.OnLog, bc.pipelineTracer.OnCommit)
+						activeState = statedb
+						payloadExecutionHits.Inc(1)
+						log.Debug("Reusing payload execution", "number", block.NumberU64(), "hash", block.Hash())
+					} else {
+						payloadExecutionMisses.Inc(1)
+						log.Debug("Discarding incomplete payload trace", "hash", block.Hash(), "err", err)
+					}
+				}
+			}
 		}
 
 		// skip block process if we already have the state, receipts and logs from mining work
