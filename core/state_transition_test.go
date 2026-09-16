@@ -18,15 +18,20 @@ package core
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"math/big"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus"
+	"github.com/ethereum/go-ethereum/consensus/beacon"
+	"github.com/ethereum/go-ethereum/consensus/ethash"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/holiman/uint256"
 )
 
 func TestCalcRefund(t *testing.T) {
@@ -380,5 +385,126 @@ func TestIntrinsicGas(t *testing.T) {
 				t.Fatalf("gas mismatch: got %+v, want %+v", got, want)
 			}
 		})
+	}
+}
+
+// TestDepositFailedBVMETHTransferGasPool covers a deposit whose BVM_ETH transfer fails
+// (ErrEthTxValueTooLarge) before the EVM runs. The deposit must still be force-included and
+// recorded as using all of its gas, and the gas pool must hold the matching reservation.
+// Before preCheck was moved ahead of transferBVMETH the pool was never debited while the
+// receipt and cumulative counters still grew by GasLimit.
+func TestDepositFailedBVMETHTransferGasPool(t *testing.T) {
+	cfg := *params.OptimismTestConfig
+	zero := uint64(0)
+	cfg.BVMETHMintUpgradeTime = &zero // production Mantle runs with the BVM_ETH transfer path active
+
+	statedb, _ := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+	evm := vm.NewEVM(
+		vm.BlockContext{BlockNumber: big.NewInt(100), Time: 1_000_000, BaseFee: big.NewInt(0)},
+		statedb,
+		&cfg,
+		vm.Config{},
+	)
+	const poolGas, depositGas = uint64(30_000_000), uint64(2_000_000)
+	to := common.HexToAddress("0x00000000000000000000000000000000000000aa")
+	msg := &Message{
+		From:        common.HexToAddress("0x00000000000000000000000000000000000000bb"),
+		To:          &to,
+		IsDepositTx: true,
+		GasLimit:    depositGas,
+		Value:       new(uint256.Int),
+		GasPrice:    new(uint256.Int),
+		GasFeeCap:   new(uint256.Int),
+		GasTipCap:   new(uint256.Int),
+		ETHTxValue:  big.NewInt(1), // From holds no BVM_ETH, so the transfer fails
+	}
+
+	t.Run("failed transfer keeps pool and counters consistent", func(t *testing.T) {
+		gp := NewGasPool(poolGas)
+		st := newStateTransition(evm, msg, gp)
+
+		res, err := st.execute()
+		if err != nil {
+			t.Fatalf("execute: unexpected consensus error: %v", err)
+		}
+		if res == nil || !errors.Is(res.Err, ErrEthTxValueTooLarge) {
+			t.Fatalf("expected failed deposit with ErrEthTxValueTooLarge, got %+v", res)
+		}
+		if res.UsedGas != depositGas {
+			t.Fatalf("failed deposit UsedGas: got %d, want %d", res.UsedGas, depositGas)
+		}
+		if got := gp.Gas(); got != poolGas-depositGas {
+			t.Fatalf("gas pool remaining: got %d, want %d (GasLimit must be reserved)", got, poolGas-depositGas)
+		}
+		if got := gp.CumulativeUsed(); got != depositGas {
+			t.Fatalf("gas pool cumulativeUsed: got %d, want %d", got, depositGas)
+		}
+	})
+
+	t.Run("deposit is not force-included when the pool cannot cover GasLimit", func(t *testing.T) {
+		gp := NewGasPool(depositGas - 1)
+		st := newStateTransition(evm, msg, gp)
+
+		if _, err := st.execute(); !errors.Is(err, ErrGasLimitReached) {
+			t.Fatalf("expected ErrGasLimitReached, got %v", err)
+		}
+		if got := gp.Gas(); got != depositGas-1 {
+			t.Fatalf("pool mutated after rejected deposit: got %d, want %d", got, depositGas-1)
+		}
+		if got := gp.CumulativeUsed(); got != 0 {
+			t.Fatalf("cumulativeUsed mutated after rejected deposit: got %d", got)
+		}
+	})
+
+}
+
+type depositGasTestChain struct {
+	consensus.ChainHeaderReader
+	config *params.ChainConfig
+	engine consensus.Engine
+}
+
+func (c depositGasTestChain) Config() *params.ChainConfig { return c.config }
+func (c depositGasTestChain) Engine() consensus.Engine    { return c.engine }
+
+func TestFailedBVMETHDepositBlockGas(t *testing.T) {
+	zero := uint64(0)
+	config := *params.TestChainConfig
+	config.Optimism = params.OptimismTestConfig.Optimism
+	config.BedrockBlock = big.NewInt(0)
+	config.RegolithTime = &zero
+	config.BVMETHMintUpgradeTime = &zero
+
+	statedb, err := state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
+	if err != nil {
+		t.Fatal(err)
+	}
+	from := common.HexToAddress("0x01")
+	to := common.HexToAddress("0x000000000000000000000000000000000000dEaD")
+	const depositGas = uint64(21_000)
+	txs := []*types.Transaction{
+		types.NewTx(&types.DepositTx{From: from, To: &to, Value: big.NewInt(0), Gas: depositGas, SourceHash: common.HexToHash("0x01")}),
+		types.NewTx(&types.DepositTx{From: from, To: &to, Value: big.NewInt(0), Gas: depositGas, EthTxValue: big.NewInt(1), SourceHash: common.HexToHash("0x02")}),
+	}
+	header := &types.Header{Number: big.NewInt(1), Time: 1, GasLimit: 30_000_000, BaseFee: big.NewInt(1), Difficulty: big.NewInt(0)}
+	block := types.NewBlockWithHeader(header).WithBody(types.Body{Transactions: txs})
+	chain := depositGasTestChain{config: &config, engine: beacon.New(ethash.NewFaker())}
+	result, err := NewStateProcessor(chain).Process(context.Background(), block, statedb, vm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Receipts) != 2 || result.Receipts[0].Status != types.ReceiptStatusSuccessful || result.Receipts[1].Status != types.ReceiptStatusFailed {
+		t.Fatalf("unexpected deposit receipts: %+v", result.Receipts)
+	}
+	if result.Receipts[1].GasUsed != depositGas || result.Receipts[1].CumulativeGasUsed != 2*depositGas || result.GasUsed != 2*depositGas {
+		t.Fatalf("failed deposit gas: receipt=%d cumulative=%d block=%d, want %d/%d/%d",
+			result.Receipts[1].GasUsed, result.Receipts[1].CumulativeGasUsed, result.GasUsed,
+			depositGas, 2*depositGas, 2*depositGas)
+	}
+	header.GasUsed = result.Receipts[1].CumulativeGasUsed
+	header.Bloom = types.MergeBloom(result.Receipts)
+	remote := types.NewBlockWithHeader(header).WithBody(types.Body{Transactions: txs})
+	if err := NewBlockValidator(&config, nil).ValidateState(remote, statedb, result, true); err != nil {
+		t.Fatalf("block with receipt-derived gas was rejected: %v", err)
 	}
 }
