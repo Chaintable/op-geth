@@ -792,18 +792,6 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 }
 
 func (st *stateTransition) innerExecute() (*ExecutionResult, error) {
-	rules := st.evm.ChainConfig().Rules(st.evm.Context.BlockNumber, st.evm.Context.Random != nil, st.evm.Context.Time)
-	if ethTxValue := st.msg.ETHTxValue; ethTxValue != nil && ethTxValue.Cmp(big.NewInt(0)) != 0 {
-		err := st.transferBVMETH(ethTxValue, rules)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	if st.msg.MetaTxParams != nil && rules.IsMantleEverest {
-		return nil, types.ErrMetaTxDisabled
-	}
-
 	// First check this message satisfies all consensus rules before
 	// applying the message. The rules include these clauses
 	//
@@ -815,10 +803,25 @@ func (st *stateTransition) innerExecute() (*ExecutionResult, error) {
 	// 6. caller has enough balance to cover asset transfer for **topmost** call
 
 	// for arsia, l1cost means l1cost + operator cost, coz we need to pay operator cost and l1 cost when executing tx
-	// Check clauses 1-3, buy gas if everything is correct
+	// Check clauses 1-3, buy gas if everything is correct.
+	//
+	// A deposit must reserve its gas before the BVM_ETH transfer can fail: the
+	// failed-deposit path charges the entire gas limit without reserving it again.
 	l1Cost, err := st.preCheck()
 	if err != nil {
 		return nil, err
+	}
+
+	rules := st.evm.ChainConfig().Rules(st.evm.Context.BlockNumber, st.evm.Context.Random != nil, st.evm.Context.Time)
+	if ethTxValue := st.msg.ETHTxValue; ethTxValue != nil && ethTxValue.Cmp(big.NewInt(0)) != 0 {
+		err := st.transferBVMETH(ethTxValue, rules)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if st.msg.MetaTxParams != nil && rules.IsMantleEverest {
+		return nil, types.ErrMetaTxDisabled
 	}
 
 	var (
