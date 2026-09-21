@@ -232,7 +232,7 @@ func (api *DebankAPI) prepareMantleBedrockData() {
 		return
 	}
 
-	stateDB, dbErr := api.eth.blockchain.StateAt(block.Root())
+	stateDB, dbErr := api.eth.blockchain.StateAt(block.Header())
 	if dbErr != nil {
 		err = fmt.Errorf("failed to get state at Mantle bedrock block: %w", dbErr)
 		return
