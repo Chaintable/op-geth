@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/pipeline/metrics"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go"
 	"github.com/ethereum/go-ethereum/pipeline/types"
 	"github.com/ethereum/go-ethereum/pipeline/util"
 	"github.com/segmentio/kafka-go"
@@ -110,10 +112,11 @@ func (p *PushProcessor) uploadWork() error {
 
 		// replace - to /
 		s3Key := strings.ReplaceAll(file.Name(), "-", "/")
-		err = p.UploadFileToS3(&DataFile{
+		// 残留文件重传不覆盖已存在对象：原对象可能已被 consistency-checker 改写（is_fork）
+		err = p.uploadFileToS3(&DataFile{
 			S3key: s3Key,
 			Data:  data,
-		})
+		}, false)
 		if err != nil {
 			return err
 		}
@@ -163,6 +166,20 @@ func (p *PushProcessor) UploadFile(dataFile *DataFile) error {
 }
 
 func (p *PushProcessor) UploadFileToS3(file *DataFile) error {
+	return p.uploadFileToS3(file, p.overwriteOnUpload(file))
+}
+
+// overwriteOnUpload 决定上传是否允许覆盖 S3 上已存在的对象。
+// validation 对象会被 consistency-checker 原地改写 is_fork 标记，
+// 覆盖上传会把标记冲回 false，因此一律不覆盖（内容确定性，已存在即跳过）。
+func (p *PushProcessor) overwriteOnUpload(file *DataFile) bool {
+	if file.Kind == "block_file_validation" {
+		return false
+	}
+	return leader.GlobalManager.IsLeader()
+}
+
+func (p *PushProcessor) uploadFileToS3(file *DataFile, overWrite bool) error {
 	start := time.Now()
 	var err error
 	defer func() {
@@ -185,13 +202,23 @@ func (p *PushProcessor) UploadFileToS3(file *DataFile) error {
 	}()
 	times := 0
 	for {
-		err = util.UploadFileToS3(p.Uploader, p.Bucket, file.S3key, file.Data, leader.GlobalManager.IsLeader())
+		err = util.UploadFileToS3(p.Uploader, p.Bucket, file.S3key, file.Data, overWrite)
 		if err != nil {
-			if times > 3 {
-				return err
+			var apiErr smithy.APIError
+			if (errors.As(err, &apiErr) && apiErr.ErrorCode() == "InternalServerException") || strings.Contains(err.Error(), "StatusCode: 500") ||
+				strings.Contains(err.Error(), "InternalServerError") {
+				log.Printf("HTTP 500 error detected, retrying in 1 second: %v", err)
+			} else {
+				// 任何错误都持续重试，避免上层 panic(err) 把节点搞挂。
+				log.Printf("S3 upload error, retrying in 1 second (attempt %d): %v", times+1, err)
 			}
-			time.Sleep(time.Second)
+			metrics.S3UploadRetryCounter.Inc(1)
 			times++
+			select {
+			case <-p.quitCh:
+				return nil
+			case <-time.After(time.Second):
+			}
 			continue
 		}
 		break
@@ -208,8 +235,15 @@ func (p *PushProcessor) UploadFilesToS3(files []*DataFile) error {
 		go func(file *DataFile) {
 			times := 0
 			for {
-				err := util.UploadFileToS3(p.Uploader, p.Bucket, file.S3key, file.Data, leader.GlobalManager.IsLeader())
+				err := util.UploadFileToS3(p.Uploader, p.Bucket, file.S3key, file.Data, p.overwriteOnUpload(file))
 				if err != nil {
+					var apiErr smithy.APIError
+					if (errors.As(err, &apiErr) && apiErr.ErrorCode() == "InternalServerException") || strings.Contains(err.Error(), "StatusCode: 500") ||
+						strings.Contains(err.Error(), "InternalServerError") {
+						log.Printf("HTTP 500 error detected, retrying in 1 second: %v", err)
+						time.Sleep(time.Second)
+						continue
+					}
 					if times > 3 {
 						lock.Lock()
 						errs = append(errs, err)

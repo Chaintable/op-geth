@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"time"
 
+	"github.com/ethereum/go-ethereum/pipeline/metrics"
 	"github.com/ethereum/go-ethereum/pipeline/types"
 	"github.com/segmentio/kafka-go"
 )
@@ -53,13 +55,14 @@ func GetLastBlockNotice(reader *kafka.Reader) (*types.BlockChangeNotification, e
 
 func NewKafkaWriter(brokers []string, topic string) *kafka.Writer {
 	return &kafka.Writer{
-		Addr:         kafka.TCP(brokers...),
-		Topic:        topic,
-		Balancer:     &kafka.Hash{},
-		RequiredAcks: kafka.RequireOne,
+		Addr:                   kafka.TCP(brokers...),
+		Topic:                  topic,
+		Balancer:               &kafka.Hash{},
+		RequiredAcks:           kafka.RequireAll,
+		AllowAutoTopicCreation: false,
+		BatchBytes:             1024 * 1024 * 10, // 10MB
 		// 默认100个，或者等待1s才发生
-		BatchBytes: 1024 * 1024 * 10,
-		BatchSize:  1,
+		BatchSize: 1,
 	}
 }
 
@@ -68,10 +71,12 @@ func WriteBlockNotice(writer *kafka.Writer, blockNotice *types.BlockChangeNotifi
 	if err != nil {
 		return err
 	}
+	start := time.Now()
 	err = writer.WriteMessages(context.Background(), kafka.Message{
 		Key:   []byte("NewBlock"),
 		Value: value,
 	})
+	metrics.KafkaWriteTimer(writer.Topic).UpdateSince(start)
 	if err != nil {
 		return err
 	}
@@ -83,10 +88,12 @@ func WriteOuterBlockNotice(writer *kafka.Writer, outerBlockNotice *types.OuterBl
 	if err != nil {
 		return err
 	}
+	start := time.Now()
 	err = writer.WriteMessages(context.Background(), kafka.Message{
 		Key:   []byte("NewBlock"),
 		Value: value,
 	})
+	metrics.KafkaWriteTimer(writer.Topic).UpdateSince(start)
 	if err != nil {
 		return err
 	}
