@@ -1525,12 +1525,9 @@ func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types
 		// 先确保 pipeline tracer 不为空，然后再判断是否需要push kafka
 		// 上一个push kafka的block, 必然存在(至少有genesis block)
 		// 上一个push kafka的block比当前的head block还要新，说明有unwind回退，不需要处理, 即使是fork，等有更新的block的时候再一起push
-		isLeader := leader.GlobalManager.IsLeader()
-		leader.GlobalManager.RLock()
-		lastPushedBlock := tracer.NodeXPusher.LastPushedBlock()
-		leader.GlobalManager.RUnlock()
+		lastPushedBlock := nodeXLastPushedBlock()
 
-		if tracer.NodeXPusher != nil && isLeader && lastPushedBlock.BlockNumber <= block.NumberU64() {
+		if lastPushedBlock != nil && lastPushedBlock.BlockNumber <= block.NumberU64() {
 			_, dropBlocks, newBlocks := bc.getCommonAncestor(*lastPushedBlock, ptypes.BlockContext{
 				BlockNumber: block.NumberU64(),
 				Hash:        block.Hash(),
@@ -2408,12 +2405,9 @@ func (bc *BlockChain) SetCanonical(head *types.Block) (common.Hash, error) {
 	// 先确保 pipeline tracer 不为空，然后再判断是否需要push kafka
 	// 上一个push kafka的block, 必然存在(至少有genesis block)
 	// 上一个push kafka的block比当前的head block还要新，说明有unwind回退，不需要处理, 即使是fork，等有更新的block的时候再一起push
-	isLeader := leader.GlobalManager.IsLeader()
-	leader.GlobalManager.RLock()
-	lastPushedBlock := tracer.NodeXPusher.LastPushedBlock()
-	leader.GlobalManager.RUnlock()
+	lastPushedBlock := nodeXLastPushedBlock()
 
-	if tracer.NodeXPusher != nil && isLeader && lastPushedBlock.BlockNumber <= head.NumberU64() {
+	if lastPushedBlock != nil && lastPushedBlock.BlockNumber <= head.NumberU64() {
 		_, dropBlocks, newBlocks := bc.getCommonAncestor(*lastPushedBlock, ptypes.BlockContext{
 			BlockNumber: head.NumberU64(),
 			Hash:        head.Hash(),
@@ -2615,6 +2609,41 @@ func (bc *BlockChain) GetHeaderByHash2(blockHash common.Hash) *types.Header {
 		}
 	}
 	return header
+}
+
+// 上次尝试从kafka重新加载last pushed block的时间(unix秒)，用于限频
+var lastPushedBlockReloadAt atomic.Int64
+
+// 返回上一个push kafka的block; 非leader、pusher为空或者kafka里还没有任何通知时返回nil。
+// 启动时topic为空(比如种子消息晚于节点启动写入)会导致LastBlockNotice一直为nil，这里限频重新从kafka读取一次
+func nodeXLastPushedBlock() *ptypes.BlockContext {
+	// rpc节点不会初始化pipeline的全局变量
+	if tracer.NodeXPusher == nil || leader.GlobalManager == nil || !leader.GlobalManager.IsLeader() {
+		return nil
+	}
+	leader.GlobalManager.RLock()
+	lastPushedBlock := tracer.NodeXPusher.LastPushedBlock()
+	leader.GlobalManager.RUnlock()
+	if lastPushedBlock != nil {
+		return lastPushedBlock
+	}
+
+	now := time.Now().Unix()
+	last := lastPushedBlockReloadAt.Load()
+	if now-last < 10 || !lastPushedBlockReloadAt.CompareAndSwap(last, now) {
+		return nil
+	}
+	leader.GlobalManager.Lock()
+	err := tracer.NodeXPusher.UpdateLastBlock()
+	lastPushedBlock = tracer.NodeXPusher.LastPushedBlock()
+	leader.GlobalManager.Unlock()
+	if err != nil {
+		log.Error("Failed to reload NodeX last pushed block", "err", err)
+	}
+	if lastPushedBlock == nil {
+		log.Error("NodeX last pushed block is empty, skip push block change notification")
+	}
+	return lastPushedBlock
 }
 
 // 返回两个块的共同祖先，以及两个块的从共同祖先到两个块的路径,即drop和new
