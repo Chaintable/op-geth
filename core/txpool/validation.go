@@ -335,7 +335,7 @@ func ValidateTransactionWithState(tx *types.Transaction, head *types.Header, sig
 		if err != nil {
 			return err
 		}
-		if tx.Gas() < floorDataGas*gasMultiplier {
+		if tx.Gas() < floorDataGas * gasMultiplier{
 			return fmt.Errorf("%w: gas %v, minimum needed %v", core.ErrFloorDataGas, tx.Gas(), floorDataGas*gasMultiplier)
 		}
 	}

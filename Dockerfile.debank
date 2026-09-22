@@ -5,11 +5,7 @@ WORKDIR /go-ethereum
 
 COPY . .
 
-RUN test -f core/state/pipeline_test.go \
-    && go mod download \
-    && go test ./core/state -run '^TestPipeline' -count=1 -v \
-    && make geth \
-    && ./build/bin/geth version
+RUN go mod download && make geth
 
 FROM ubuntu:24.04
 

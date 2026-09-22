@@ -99,7 +99,7 @@ func VerifyEIP4844Header(config *params.ChainConfig, parent, header *types.Heade
 	}
 
 	bcfg, err := latestBlobConfig(config, header.Time)
-	if err != nil && !config.IsOptimism() {
+	if err != nil && !config.IsOptimism(){
 		panic("called before EIP-4844 is active")
 	}
 

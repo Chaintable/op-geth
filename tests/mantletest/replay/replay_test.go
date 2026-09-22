@@ -228,10 +228,10 @@ func TestReplayMainnetTransfer_e0811036_PostArsia(t *testing.T) {
 
 	tx := types.NewTx(&types.DynamicFeeTx{
 		ChainID:    big.NewInt(5000),
-		Nonce:      0x5f,                     // 95
-		GasTipCap:  big.NewInt(0x186a0),      // 100,000 wei
-		GasFeeCap:  big.NewInt(0x22ecb3e2a0), // 150,000,000,000 wei (~150 gwei)
-		Gas:        0x5208,                   // 21,000 vanilla-eth transfer
+		Nonce:      0x5f,                      // 95
+		GasTipCap:  big.NewInt(0x186a0),       // 100,000 wei
+		GasFeeCap:  big.NewInt(0x22ecb3e2a0),  // 150,000,000,000 wei (~150 gwei)
+		Gas:        0x5208,                    // 21,000 vanilla-eth transfer
 		To:         &addr,
 		Value:      hexutil.MustDecodeBig("0xde0b6b3a7640000"), // 1 ETH
 		Data:       nil,
@@ -247,9 +247,9 @@ func TestReplayMainnetTransfer_e0811036_PostArsia(t *testing.T) {
 		ExpectHash: common.HexToHash("0xe081103e6990d27e08d88e29216e2497beecc730c18192ff41ca92bbd951b87a"),
 		Header: &types.Header{
 			Number:   new(big.Int).SetUint64(94438807),
-			Time:     0x69e8dd36,              // 1,776,868,662 — past MantleArsiaTime 1,776,841,200
-			GasLimit: 0x3938700,               // 60,000,000 (vanilla-eth scale)
-			BaseFee:  big.NewInt(0xba43b7400), // 50 gwei
+			Time:     0x69e8dd36,               // 1,776,868,662 — past MantleArsiaTime 1,776,841,200
+			GasLimit: 0x3938700,                // 60,000,000 (vanilla-eth scale)
+			BaseFee:  big.NewInt(0xba43b7400),  // 50 gwei
 			Coinbase: common.HexToAddress("0x4200000000000000000000000000000000000011"),
 		},
 		Sender: addr,
@@ -270,8 +270,8 @@ func TestReplayMainnetTransfer_e0811036_PostArsia(t *testing.T) {
 		},
 		Golden: GoldenReceipt{
 			Status:            types.ReceiptStatusSuccessful,
-			GasUsed:           0x5208,         // 21,000 — vanilla-eth transfer
-			CumulativeGasUsed: u64Ptr(0x5208), // == GasUsed: normal-tx two-axis consistency (Used==CumulativeUsed)
+			GasUsed:           0x5208,            // 21,000 — vanilla-eth transfer
+			CumulativeGasUsed: u64Ptr(0x5208),    // == GasUsed: normal-tx two-axis consistency (Used==CumulativeUsed)
 			L1Fee:             hexutil.MustDecodeBig("0x253646c8b6da40"),
 			L1GasUsed:         big.NewInt(0x640), // 1600
 		},

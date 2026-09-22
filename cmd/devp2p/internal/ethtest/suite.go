@@ -488,7 +488,7 @@ func (s *Suite) TestGetReceipts(t *utesting.T) {
 
 func (s *Suite) TestGetLargeReceipts(t *utesting.T) {
 	t.Log(`This test sends GetReceipts requests to the node for large receipt (>10MiB) in the test chain.
-	This test is meaningful only if the client supports protocol version ETH70 or higher
+	This test is meaningful only if the client supports protocol version ETH70 or higher 
 	and LargeReceiptBlock is configured in txInfo.json.`)
 	conn, err := s.dialAndPeer(nil)
 	if err != nil {

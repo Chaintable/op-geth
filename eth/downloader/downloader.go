@@ -242,7 +242,7 @@ func New(stateDb ethdb.Database, mode ethconfig.SyncMode, chain BlockChain, drop
 	dl := &Downloader{
 		stateDB:           stateDb,
 		moder:             newSyncModer(mode, chain, stateDb),
-		queue:             newQueue(chain.Config(), blockCacheMaxItems, blockCacheInitialItems),
+		queue:             newQueue(chain.Config(),blockCacheMaxItems, blockCacheInitialItems),
 		peers:             newPeerSet(),
 		blockchain:        chain,
 		chainCutoffNumber: cutoffNumber,

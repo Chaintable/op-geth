@@ -1078,12 +1078,12 @@ func DoEstimateGas(ctx context.Context, b Backend, args TransactionArgs, blockNr
 		blobBaseFee = blockOverrides.BlobBaseFee.ToInt()
 	}
 	opts := &gasestimator.Options{
-		Config:                     b.ChainConfig(),
-		Chain:                      NewChainContext(ctx, b),
-		Header:                     header,
-		State:                      state,
-		BlobBaseFee:                blobBaseFee,
-		ErrorRatio:                 estimateGasErrorRatio,
+		Config:      b.ChainConfig(),
+		Chain:       NewChainContext(ctx, b),
+		Header:      header,
+		State:       state,
+		BlobBaseFee: blobBaseFee,
+		ErrorRatio:  estimateGasErrorRatio,
 		DefaultGasPriceForEstimate: gasPriceForEstimate,
 	}
 	if rules.IsMantleArsia {

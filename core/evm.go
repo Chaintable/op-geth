@@ -41,11 +41,11 @@ type ChainContext interface {
 // NewEVMBlockContext creates a new context for use in the EVM.
 func NewEVMBlockContext(header *types.Header, chain ChainContext, author *common.Address, config *params.ChainConfig, statedb types.StateGetter) vm.BlockContext {
 	var (
-		beneficiary    common.Address
-		baseFee        *big.Int
-		blobBaseFee    *big.Int
-		random         *common.Hash
-		slotNum        uint64
+		beneficiary common.Address
+		baseFee     *big.Int
+		blobBaseFee *big.Int
+		random      *common.Hash
+		slotNum     uint64
 		operatorCostFn types.OperatorCostFunc
 	)
 
@@ -72,18 +72,18 @@ func NewEVMBlockContext(header *types.Header, chain ChainContext, author *common
 	}
 
 	return vm.BlockContext{
-		CanTransfer:      CanTransfer,
-		Transfer:         Transfer,
-		GetHash:          GetHashFn(header, chain),
-		Coinbase:         beneficiary,
-		BlockNumber:      new(big.Int).Set(header.Number),
-		Time:             header.Time,
-		Difficulty:       new(big.Int).Set(header.Difficulty),
-		BaseFee:          baseFee,
-		BlobBaseFee:      blobBaseFee,
-		GasLimit:         header.GasLimit,
-		Random:           random,
-		SlotNum:          slotNum,
+		CanTransfer: CanTransfer,
+		Transfer:    Transfer,
+		GetHash:     GetHashFn(header, chain),
+		Coinbase:    beneficiary,
+		BlockNumber: new(big.Int).Set(header.Number),
+		Time:        header.Time,
+		Difficulty:  new(big.Int).Set(header.Difficulty),
+		BaseFee:     baseFee,
+		BlobBaseFee: blobBaseFee,
+		GasLimit:    header.GasLimit,
+		Random:      random,
+		SlotNum:     slotNum,
 		L1CostFunc:       types.NewL1CostFunc(config, statedb),
 		OperatorCostFunc: operatorCostFn,
 	}

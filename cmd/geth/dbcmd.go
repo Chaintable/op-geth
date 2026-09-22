@@ -126,7 +126,7 @@ Remove blockchain and state databases`,
 			inspectTrieContractFlag,
 		}, utils.NetworkFlags, utils.DatabaseFlags),
 		Usage: "Print detailed trie information about the structure of account trie and storage tries.",
-		Description: `This commands iterates the entrie trie-backed state. If the 'blocknum' is not specified,
+		Description: `This commands iterates the entrie trie-backed state. If the 'blocknum' is not specified, 
 the latest block number will be used by default.`,
 	}
 	dbCheckStateContentCmd = &cli.Command{
