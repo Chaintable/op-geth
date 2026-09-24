@@ -3,7 +3,6 @@ package eth
 import (
 	"context"
 	"fmt"
-	"github.com/ethereum/go-ethereum/rlp"
 	"math/big"
 	"strings"
 	"sync"
@@ -20,8 +19,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/eth/tracers"
-	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/holiman/uint256"
 )
@@ -129,7 +128,7 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 	if err != nil {
 		return nil, err
 	}
-	statedb, release, err := api.eth.APIBackend.StateAtBlock(ctx, parent, 128, nil, true, false)
+	statedb, release, err := api.eth.APIBackend.StateAtBlock(ctx, parent, nil, true, false)
 	if err != nil {
 		return nil, err
 	}
@@ -148,39 +147,12 @@ func (api *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNu
 		Stop:      rpcTracer.Stop,
 		GetResult: rpcTracer.GetResult,
 	}
-	tracingStateDB := state.NewHookedState(statedb, tracer.Hooks)
-	blockCtx := core.NewEVMBlockContext(block.Header(), ethapi.NewChainContext(ctx, api.eth.APIBackend), nil, api.eth.APIBackend.ChainConfig(), statedb)
-	evm := vm.NewEVM(blockCtx, tracingStateDB, api.eth.APIBackend.ChainConfig(), vm.Config{Tracer: tracer.Hooks})
-
 	rpcTracer.OnBlockStart(block)
 
-	if beaconRoot := block.BeaconRoot(); beaconRoot != nil {
-		core.ProcessBeaconBlockRoot(*beaconRoot, evm)
-	}
-	if api.eth.APIBackend.ChainConfig().IsPrague(block.Number(), block.Time()) || api.eth.APIBackend.ChainConfig().IsVerkle(block.Number(), block.Time()) {
-		core.ProcessParentBlockHash(block.ParentHash(), evm)
-	}
-	var (
-		txs     = block.Transactions()
-		signer  = types.MakeSigner(api.eth.APIBackend.ChainConfig(), block.Number(), block.Time())
-		gp      = new(core.GasPool).AddGas(block.GasLimit())
-		usedGas = new(uint64)
-	)
-
-	for i, tx := range txs {
-		rules := api.eth.APIBackend.ChainConfig().Rules(block.Number(), false, block.Time())
-		msg, err := core.TransactionToMessage(tx, signer, blockCtx.BaseFee, &rules)
-		if err != nil {
-			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
-		}
-		statedb.SetTxContext(tx.Hash(), i)
-
-		receipt, err := core.ApplyTransactionWithEVM(msg, gp, statedb, block.Number(), block.Hash(), block.Time(), tx, usedGas, evm)
-		if err != nil {
-			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
-		}
-
-		receipt.SetEffectiveGasPrice(tx, blockCtx.BaseFee)
+	// Replay through the canonical processor so gas accounting, system calls,
+	// and finalization follow the same rules as live block execution.
+	if _, err := api.eth.blockchain.Processor().Process(ctx, block, statedb, vm.Config{Tracer: tracer.Hooks}); err != nil {
+		return nil, fmt.Errorf("could not replay block %d: %w", block.NumberU64(), err)
 	}
 
 	root, destructs, accounts, storages, codes, err := statedb.StateDiff(api.eth.APIBackend.ChainConfig().IsEIP158(block.Number()))
@@ -260,17 +232,21 @@ func (api *DebankAPI) prepareMantleBedrockData() {
 		return
 	}
 
-	stateDB, dbErr := api.eth.blockchain.StateAt(block.Root())
+	stateDB, dbErr := api.eth.blockchain.StateAt(block.Header())
 	if dbErr != nil {
 		err = fmt.Errorf("failed to get state at Mantle bedrock block: %w", dbErr)
 		return
 	}
 
-	dump := stateDB.RawDump2(&state.DumpConfig{
+	dump, dumpErr := stateDB.RawDump2(&state.DumpConfig{
 		SkipCode:          false,
 		SkipStorage:       false,
 		OnlyWithAddresses: false,
 	}, api.eth.dataDir)
+	if dumpErr != nil {
+		err = fmt.Errorf("failed to dump Mantle bedrock state: %w", dumpErr)
+		return
+	}
 
 	log.Info("State dump completed", "accounts", len(dump.Accounts))
 
