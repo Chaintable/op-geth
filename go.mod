@@ -5,9 +5,9 @@ go 1.24.2
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.2.0
 	github.com/BurntSushi/toml v1.4.0
-	github.com/Chaintable/pipeline v0.0.62-op-v1.101603.5
+	github.com/Chaintable/pipeline v0.0.63-op-v1.101605.0-ct.1
 	github.com/Microsoft/go-winio v0.6.2
-	github.com/VictoriaMetrics/fastcache v1.12.2
+	github.com/VictoriaMetrics/fastcache v1.13.0
 	github.com/aws/aws-sdk-go-v2 v1.32.5
 	github.com/aws/aws-sdk-go-v2/config v1.28.5
 	github.com/aws/aws-sdk-go-v2/credentials v1.17.46
@@ -19,7 +19,7 @@ require (
 	github.com/cloudflare/cloudflare-go v0.114.0
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/consensys/gnark-crypto v0.18.0
-	github.com/crate-crypto/go-eth-kzg v1.3.0
+	github.com/crate-crypto/go-eth-kzg v1.4.0
 	github.com/crate-crypto/go-ipa v0.0.0-20240724233137-53bbb0ceb27a
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc
 	github.com/dchest/siphash v1.2.3
@@ -36,7 +36,7 @@ require (
 	github.com/gballet/go-libpcsclite v0.0.0-20190607065134-2772fd86a8ff
 	github.com/gofrs/flock v0.12.1
 	github.com/golang-jwt/jwt/v4 v4.5.2
-	github.com/golang/snappy v0.0.5-0.20220116011046-fa5810519dcb
+	github.com/golang/snappy v1.0.0
 	github.com/google/gofuzz v1.2.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.0
@@ -67,7 +67,7 @@ require (
 	github.com/shirou/gopsutil v3.21.4-0.20210419000835-c7a38de76ee5+incompatible
 	github.com/status-im/keycard-go v0.2.0
 	github.com/stretchr/testify v1.10.0
-	github.com/supranational/blst v0.3.15
+	github.com/supranational/blst v0.3.16-0.20250831170142-f48500c1fdbe
 	github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7
 	github.com/urfave/cli/v2 v2.27.5
 	go.uber.org/automaxprocs v1.5.2
@@ -76,7 +76,7 @@ require (
 	golang.org/x/exp v0.0.0-20240213143201-ec583247a57a
 	golang.org/x/net v0.38.0
 	golang.org/x/sync v0.12.0
-	golang.org/x/sys v0.31.0
+	golang.org/x/sys v0.36.0
 	golang.org/x/text v0.23.0
 	golang.org/x/time v0.9.0
 	golang.org/x/tools v0.29.0
