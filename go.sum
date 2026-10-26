@@ -20,6 +20,8 @@ github.com/Chaintable/pipeline v0.0.62-op-v1.101603.5 h1:3Oq/kBhbwTpAMEfxTgIntZS
 github.com/Chaintable/pipeline v0.0.62-op-v1.101603.5/go.mod h1:tvtbKNjz4yOynQZoVoB5EMH3gCx6HOWOe7IjPLLqvPI=
 github.com/Chaintable/pipeline v0.0.63-op-v1.101605.0-ct.1 h1:xJju+IwizoAN+6AjqNGXHUk2RHo1aUZ5BRMj/0SmuV0=
 github.com/Chaintable/pipeline v0.0.63-op-v1.101605.0-ct.1/go.mod h1:2AB3EY9PnHPmOKHmBcN7J4LWPahxGX3kNo5vtNxnZ7Y=
+github.com/Chaintable/pipeline v0.0.64-0.20261026071507-8bb885ad7d6c h1:ET2pA2bbVQKZYweWK8X2+OxwlycgsTaT699Uv9H1XTg=
+github.com/Chaintable/pipeline v0.0.64-0.20261026071507-8bb885ad7d6c/go.mod h1:2AB3EY9PnHPmOKHmBcN7J4LWPahxGX3kNo5vtNxnZ7Y=
 github.com/DataDog/zstd v1.4.5 h1:EndNeuB0l9syBZhut0wns3gV1hL8zX8LIu6ZiVHWLIQ=
 github.com/DataDog/zstd v1.4.5/go.mod h1:1jcaCB/ufaK+sKp1NBhlGmpz41jOoPQ35bpF36t7BBo=
 github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERoyfY=
