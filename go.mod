@@ -199,3 +199,5 @@ exclude google.golang.org/genproto v0.0.0-20230227214838-9b19f0bdc514
 exclude google.golang.org/genproto v0.0.0-20230410155749-daa745c078e1
 
 //replace github.com/ethereum-optimism/superchain-registry/superchain => ../superchain-registry/superchain
+
+replace github.com/Chaintable/pipeline => /tmp/pw/op-failover
