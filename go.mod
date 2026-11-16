@@ -5,7 +5,7 @@ go 1.24.2
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.2.0
 	github.com/BurntSushi/toml v1.4.0
-	github.com/Chaintable/pipeline v0.0.63-op-v1.101605.0-ct.2
+	github.com/Chaintable/pipeline v0.0.64-0.20261113102413-9b6133b38296
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/VictoriaMetrics/fastcache v1.13.0
 	github.com/aws/aws-sdk-go-v2 v1.32.5
@@ -199,5 +199,3 @@ exclude google.golang.org/genproto v0.0.0-20230227214838-9b19f0bdc514
 exclude google.golang.org/genproto v0.0.0-20230410155749-daa745c078e1
 
 //replace github.com/ethereum-optimism/superchain-registry/superchain => ../superchain-registry/superchain
-
-replace github.com/Chaintable/pipeline => /tmp/pw/op-failover
