@@ -117,14 +117,7 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		receipt, err := applyTransaction(msg, p.config, gp, statedb, blockNumber, blockHash, tx, usedGas, vmenv)
 		if pipelineTracer != nil {
 			if receipt != nil {
-				receipt.EffectiveGasPrice = new(big.Int).Set(msg.GasPrice)
-				if context.L1CostFunc != nil && !tx.IsDepositTx() && receipt.GasUsed > 0 {
-					l1Fee := context.L1CostFunc(tx.RollupCostData(), context.Time)
-					if l1Fee != nil && l1Fee.Sign() > 0 {
-						gasUsed := new(big.Int).SetUint64(receipt.GasUsed)
-						receipt.EffectiveGasPrice.Add(receipt.EffectiveGasPrice, new(big.Int).Div(l1Fee, gasUsed))
-					}
-				}
+				receipt.EffectiveGasPrice = pipelineGasPrice(p.config, context, msg, tx, receipt.GasUsed)
 			}
 			pipelineTracer.OnTxEnd(receipt, err)
 		}
@@ -164,6 +157,26 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 		}
 	}
 	return receipts, allLogs, *usedGas, nil
+}
+
+// pipelineGasPrice returns the gas price reported to the pipeline tracer: the
+// effective L2 gas price plus the L1 data fee spread over the gas used.
+//
+// Since Wright a zero gas price transaction pays no L1 fee (see
+// StateTransition.buyGas and Receipts.DeriveFields), so nothing is added for it.
+func pipelineGasPrice(config *params.ChainConfig, blockCtx vm.BlockContext, msg *Message, tx *types.Transaction, gasUsed uint64) *big.Int {
+	gasPrice := new(big.Int).Set(msg.GasPrice)
+	if blockCtx.L1CostFunc == nil || tx.IsDepositTx() || gasUsed == 0 {
+		return gasPrice
+	}
+	if msg.GasPrice.Sign() == 0 && config.IsWright(blockCtx.Time) {
+		return gasPrice
+	}
+	l1Fee := blockCtx.L1CostFunc(tx.RollupCostData(), blockCtx.Time)
+	if l1Fee != nil && l1Fee.Sign() > 0 {
+		gasPrice.Add(gasPrice, new(big.Int).Div(l1Fee, new(big.Int).SetUint64(gasUsed)))
+	}
+	return gasPrice
 }
 
 func applyTransaction(msg *Message, config *params.ChainConfig, gp *GasPool, statedb *state.StateDB, blockNumber *big.Int, blockHash common.Hash, tx *types.Transaction, usedGas *uint64, evm *vm.EVM) (*types.Receipt, error) {
