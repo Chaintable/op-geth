@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - "opbnb"
+      - "codex/opbnb-payload-trace-cache"
   workflow_dispatch:
 
 concurrency:
