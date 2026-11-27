@@ -241,6 +241,18 @@ func FindCommonAncestor(a *tbc.HashHeight, b *tbc.HashHeight) (*wire.BlockHeader
 // target state involves a reorganization.
 func TBCIndexToHashHeight(targetHH *tbc.HashHeight) error {
 	log.Info("TBCIndexToHashHight called with target", "target", targetHH.String())
+	// Fast path: this is called for every block, and for most blocks the indexers
+	// are already at the target. Return before FixMismatchedIndexesIfRequired,
+	// whose SyncIndexersToHash call is a no-op in that case but still asks every
+	// connected Bitcoin peer for headers when it returns; during historical sync
+	// that floods TBC with header requests and stalls block import.
+	if uIndexInfo, err := TBCFullNode.UtxoIndexHash(MainCtx); err == nil {
+		if tIndexInfo, err := TBCFullNode.TxIndexHash(MainCtx); err == nil &&
+			hashEquals(uIndexInfo.Hash, targetHH.Hash) && hashEquals(tIndexInfo.Hash, targetHH.Hash) {
+			return nil
+		}
+	}
+
 	// Check for indexer desync and attempt to fix.
 	FixMismatchedIndexesIfRequired(MainCtx)
 
